@@ -10,9 +10,22 @@
 		A2DC81972FDDEE1B0073808B /* CalorieSnap.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CalorieSnap.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		A2DC821C2FDF32AB0073808B /* Exceptions for "CalorieSnap" folder in "CalorieSnap" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = A2DC81962FDDEE1B0073808B /* CalorieSnap */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		A2DC81992FDDEE1B0073808B /* CalorieSnap */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				A2DC821C2FDF32AB0073808B /* Exceptions for "CalorieSnap" folder in "CalorieSnap" target */,
+			);
 			path = CalorieSnap;
 			sourceTree = "<group>";
 		};
@@ -246,6 +259,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = CalorieSnap/CalorieSnap.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = NG6FM3A4T2;
@@ -254,6 +268,13 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = CalorieSnap/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Vanky Life";
+				INFOPLIST_KEY_NSCalendarsUsageDescription = "CalorieSnap needs access to read and add events to your Apple Calendar";
+				INFOPLIST_KEY_NSCameraUsageDescription = "CalorieSnap needs camera access to photograph your food";
+				INFOPLIST_KEY_NSHealthClinicalHealthRecordsShareUsageDescription = "CalorieSnap reads your health records to improve your goals";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "CalorieSnap reads your steps, sleep and activity data";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "CalorieSnap needs photo access to log meals from your library";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -290,6 +311,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = CalorieSnap/CalorieSnap.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = NG6FM3A4T2;
@@ -298,6 +320,13 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = CalorieSnap/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Vanky Life";
+				INFOPLIST_KEY_NSCalendarsUsageDescription = "CalorieSnap needs access to read and add events to your Apple Calendar";
+				INFOPLIST_KEY_NSCameraUsageDescription = "CalorieSnap needs camera access to photograph your food";
+				INFOPLIST_KEY_NSHealthClinicalHealthRecordsShareUsageDescription = "CalorieSnap reads your health records to improve your goals";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "CalorieSnap reads your steps, sleep and activity data";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "CalorieSnap needs photo access to log meals from your library";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
