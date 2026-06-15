@@ -62,9 +62,6 @@ class CalendarStore: ObservableObject {
         logs[dateKey(date)]?.calories ?? 0
     }
 
-    func weightForDate(_ date: Date) -> Double? {
-        logs[dateKey(date)]?.weight
-    }
 }
 
 // MARK: - Calendar View
@@ -119,7 +116,7 @@ struct CalendarView: View {
                                     isSelected: isSameDay(date, selectedDate),
                                     isToday: isSameDay(date, Date()),
                                     calories: store.caloriesForDate(date),
-                                    weight: store.weightForDate(date),
+                                    weight: nil,
                                     hasEvent: !eventStore.eventsForDate(date).isEmpty ||
                                               !eventStore.appleEventsForDate(date).isEmpty,
                                     isPeriod: healthKit.isPeriodDate(date)
@@ -134,7 +131,6 @@ struct CalendarView: View {
 
                     // Dot legend
                     HStack(spacing: 16) {
-                        LegendDot(color: .blue, label: "Weight")
                         LegendDot(color: .purple, label: "Event")
                         LegendDot(color: .pink, label: "Period")
                     }
@@ -208,8 +204,7 @@ struct CalendarView: View {
                         }
                     }
 
-                    // Weight trend
-                    WeightTrendCard(store: store).padding(.horizontal).padding(.bottom, 24)
+                    
                 }
             }
             .navigationTitle("Calendar")
@@ -217,7 +212,7 @@ struct CalendarView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Menu {
                         Button(action: { showDayDetail = true }) {
-                            Label("Log Health Data", systemImage: "heart.text.square")
+                            Label("Log Calories/Macros", systemImage: "heart.text.square")
                         }
                         Button(action: { showAddEvent = true }) {
                             Label("Add Event", systemImage: "calendar.badge.plus")
@@ -225,7 +220,9 @@ struct CalendarView: View {
                     } label: { Image(systemName: "plus") }
                 }
             }
-            .sheet(isPresented: $showDayDetail) { DayDetailView(date: selectedDate, store: store) }
+            .sheet(isPresented: $showDayDetail) {
+                DayDetailView(date: selectedDate, store: store)
+            }
             .sheet(isPresented: $showAddEvent) { AddEventView(eventStore: eventStore, date: selectedDate) }
             .onAppear {
                 if !healthKit.isAuthorized { healthKit.requestAuthorization() }
@@ -537,10 +534,6 @@ struct DaySummaryCard: View {
             HStack {
                 Text("Health").font(.headline)
                 Spacer()
-                if let w = log.weight {
-                    Label(String(format: "%.1f kg", w), systemImage: "scalemass")
-                        .font(.subheadline).foregroundColor(.blue)
-                }
             }
             HStack(spacing: 16) {
                 NutritionBadge(label: "Calories", value: "\(log.calories)", unit: "kcal", color: .red)
@@ -562,59 +555,10 @@ struct EmptyDayCard: View {
     var body: some View {
         VStack(spacing: 8) {
             Text("No health data logged").font(.subheadline).foregroundColor(.secondary)
-            Text("Tap + to log weight or calories").font(.caption).foregroundColor(.secondary)
+            Text("Tap + to log calories or macros").font(.caption).foregroundColor(.secondary)
         }
         .frame(maxWidth: .infinity).padding()
         .background(.regularMaterial).cornerRadius(16)
-    }
-}
-
-// MARK: - Weight Trend Card
-
-struct WeightTrendCard: View {
-    @ObservedObject var store: CalendarStore
-
-    var last14Days: [(date: Date, weight: Double)] {
-        (0..<14).compactMap { offset -> (Date, Double)? in
-            let date = Calendar.current.date(byAdding: .day, value: -offset, to: Date())!
-            if let w = store.weightForDate(date) { return (date, w) }
-            return nil
-        }.reversed()
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Weight Trend (14 days)").font(.headline)
-
-            if last14Days.isEmpty {
-                Text("Log your weight by tapping + on any day")
-                    .font(.caption).foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center).padding()
-            } else {
-                HStack(alignment: .bottom, spacing: 6) {
-                    ForEach(last14Days, id: \.date) { entry in
-                        VStack(spacing: 4) {
-                            Text(String(format: "%.0f", entry.weight)).font(.system(size: 8)).foregroundColor(.secondary)
-                            RoundedRectangle(cornerRadius: 4).fill(Color.blue.opacity(0.7))
-                                .frame(width: 18, height: barHeight(entry.weight))
-                            Text(dayLabel(entry.date)).font(.system(size: 8)).foregroundColor(.secondary)
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity).padding(.vertical, 8)
-            }
-        }
-        .padding().background(.regularMaterial).cornerRadius(16)
-    }
-
-    func barHeight(_ weight: Double) -> CGFloat {
-        let weights = last14Days.map { $0.weight }
-        guard let min = weights.min(), let max = weights.max(), max != min else { return 60 }
-        return CGFloat(((weight - min) / (max - min)) * 60 + 20)
-    }
-
-    func dayLabel(_ date: Date) -> String {
-        let f = DateFormatter(); f.dateFormat = "M/d"; return f.string(from: date)
     }
 }
 
@@ -629,17 +573,10 @@ struct DayDetailView: View {
     @State private var carbs = ""
     @State private var protein = ""
     @State private var fat = ""
-    @State private var weight = ""
 
     var body: some View {
         NavigationView {
             Form {
-                Section("⚖️ Weight") {
-                    HStack {
-                        TextField("e.g. 68.5", text: $weight).keyboardType(.decimalPad)
-                        Text("kg").foregroundColor(.secondary)
-                    }
-                }
                 Section("🔥 Calories") {
                     HStack {
                         TextField("e.g. 1800", text: $calories).keyboardType(.numberPad)
@@ -664,7 +601,7 @@ struct DayDetailView: View {
                     }
                 }
             }
-            .navigationTitle("Log Health Data").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("Log Calories/Macros").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -679,7 +616,6 @@ struct DayDetailView: View {
         if let log = store.logForDate(date) {
             calories = "\(log.calories)"; carbs = "\(Int(log.carbs))"
             protein = "\(Int(log.protein))"; fat = "\(Int(log.fat))"
-            if let w = log.weight { weight = String(format: "%.1f", w) }
         }
     }
 
@@ -690,7 +626,6 @@ struct DayDetailView: View {
         if let c = Double(carbs) { log.carbs = c }
         if let p = Double(protein) { log.protein = p }
         if let f = Double(fat) { log.fat = f }
-        if let w = Double(weight) { log.weight = w }
         store.saveLog(log)
     }
 }

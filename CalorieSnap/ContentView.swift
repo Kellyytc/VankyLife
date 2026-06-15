@@ -30,14 +30,17 @@ struct DashboardView: View {
     @AppStorage("totalProtein") var totalProtein: Double = 0
     @AppStorage("totalFat") var totalFat: Double = 0
     @StateObject private var profile = UserProfile()
-    @StateObject private var calendarStore = CalendarStore()
     @StateObject private var healthKit = HealthKitManager()
     @StateObject private var eventStore = EventStore()
 
     @State private var recentMeals: [ManualMeal] = ManualMeal.loadAll()
+    @State private var weightLogs: [WeightLog] = WeightLog.loadAll()
+    @State private var showingWeightLogSheet = false
+    @State private var selectedWeightLog: WeightLog? = nil
+    @State private var showingQuickLogOptions = false
+    @State private var showingAddTransactionSheet = false
     @State private var dragOffset: CGFloat = 0
     @State private var showingLogPanel = false
-    @State private var showingFinancePanel = false
 
     var goal: Double { Double(profile.dailyCalorieGoal) }
 
@@ -46,16 +49,28 @@ struct DashboardView: View {
         return Int(goal) + active
     }
 
-    var last7DaysWeight: [(date: Date, weight: Double)] {
-        (0..<7).compactMap { offset -> (Date, Double)? in
-            let date = Calendar.current.date(byAdding: .day, value: -offset, to: Date())!
-            if let w = calendarStore.weightForDate(date) { return (date, w) }
-            return nil
-        }.reversed()
+    var recentWeightLogs: [WeightLog] {
+        let start = Calendar.current.date(byAdding: .day, value: -6, to: Calendar.current.startOfDay(for: Date())) ?? Date()
+        return weightLogs
+            .filter { $0.date >= start }
+            .sorted { $0.date < $1.date }
     }
 
-    var minWeight: Double { last7DaysWeight.map { $0.weight }.min() ?? 60 }
-    var maxWeight: Double { last7DaysWeight.map { $0.weight }.max() ?? 80 }
+    var groupedRecentWeightLogs: [(date: Date, logs: [WeightLog])] {
+        let groups = Dictionary(grouping: recentWeightLogs) {
+            Calendar.current.startOfDay(for: $0.date)
+        }
+        return groups
+            .map { (date: $0.key, logs: $0.value.sorted { $0.date < $1.date }) }
+            .sorted { $0.date < $1.date }
+    }
+
+    var latestWeightLog: WeightLog? {
+        weightLogs.sorted { $0.date > $1.date }.first
+    }
+
+    var minWeight: Double { recentWeightLogs.map { $0.weight }.min() ?? 60 }
+    var maxWeight: Double { recentWeightLogs.map { $0.weight }.max() ?? 80 }
 
     var screenWidth: CGFloat {
         (UIApplication.shared.connectedScenes.first as? UIWindowScene)?
@@ -88,19 +103,13 @@ struct DashboardView: View {
                 ScrollView {
                     VStack(spacing: 20) {
 
-                        // Swipe hints
+                        // Quick log hint
                         HStack {
-                            HStack(spacing: 4) {
-                                Image(systemName: "chevron.right")
-                                    .font(.caption2).foregroundColor(.secondary)
-                                Text("Finance").font(.caption2).foregroundColor(.secondary)
-                            }
                             Spacer()
-                            HStack(spacing: 4) {
-                                Text("Log Meal").font(.caption2).foregroundColor(.secondary)
-                                Image(systemName: "chevron.left")
-                                    .font(.caption2).foregroundColor(.secondary)
-                            }
+                            Text("Tap + to log meal, weight, or finance")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            Spacer()
                         }
                         .padding(.horizontal).padding(.top, 4)
 
@@ -193,25 +202,26 @@ struct DashboardView: View {
                                     Text("\(todayMeals.count) meals")
                                         .font(.caption).foregroundColor(.secondary)
                                 }
-                                ForEach(todayMeals) { meal in
-                                    HStack(spacing: 10) {
-                                        Text(meal.emoji)
-                                            .font(.system(size: 22))
-                                            .frame(width: 36, height: 36)
-                                            .background(Color.green.opacity(0.1))
-                                            .cornerRadius(8)
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text(meal.name)
-                                                .font(.subheadline).fontWeight(.medium)
-                                            Text(meal.mealType.emoji + " " + meal.mealType.rawValue)
-                                                .font(.caption2).foregroundColor(.secondary)
-                                        }
-                                        Spacer()
-                                        Text("\(meal.calories) kcal")
-                                            .font(.subheadline).fontWeight(.semibold)
-                                            .foregroundColor(.green)
-                                    }
+                        ForEach(todayMeals) { meal in
+                            HStack(spacing: 10) {
+                                Text(meal.emoji)
+                                    .font(.system(size: 22))
+                                    .frame(width: 36, height: 36)
+                                    .background(Color.green.opacity(0.1))
+                                    .cornerRadius(8)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(meal.name)
+                                        .font(.subheadline).fontWeight(.medium)
+                                    Text("\(meal.mealType.emoji) \(meal.mealType.rawValue)")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
                                 }
+                                Spacer()
+                                Text("\(meal.calories) kcal")
+                                    .font(.subheadline).fontWeight(.semibold)
+                                    .foregroundColor(.green)
+                            }
+                        }
                             }
                             .padding().background(.regularMaterial)
                             .cornerRadius(16).padding(.horizontal)
@@ -252,26 +262,28 @@ struct DashboardView: View {
                         MonthFinanceSummary(store: financeStore)
                             .padding(.horizontal)
 
+
                         // Weight trend
                         VStack(alignment: .leading, spacing: 12) {
                             HStack {
                                 Text("Weight Trend").font(.headline)
                                 Spacer()
-                                if let latest = last7DaysWeight.last {
-                                    Text(String(format: "%.1f kg", latest.weight))
-                                        .font(.subheadline).fontWeight(.semibold)
+                                if let latest = latestWeightLog {
+                                    Text(String(format: "Latest %.1f kg", latest.weight))
+                                        .font(.subheadline)
+                                        .fontWeight(.semibold)
                                         .foregroundColor(.blue)
                                 }
                             }
 
-                            if last7DaysWeight.isEmpty {
+                            if recentWeightLogs.isEmpty {
                                 VStack(spacing: 8) {
-                                    Image(systemName: "chart.line.uptrend.xyaxis")
+                                    Image(systemName: "scalemass")
                                         .font(.system(size: 36))
                                         .foregroundColor(.secondary.opacity(0.4))
                                     Text("No weight logged yet")
                                         .font(.subheadline).foregroundColor(.secondary)
-                                    Text("Log your weight in the Calendar tab")
+                                    Text("Tap + in the top right, then choose Log Weight")
                                         .font(.caption).foregroundColor(.secondary)
                                 }
                                 .frame(maxWidth: .infinity).padding(.vertical, 20)
@@ -279,8 +291,7 @@ struct DashboardView: View {
                                 GeometryReader { geo in
                                     let w = geo.size.width
                                     let h = geo.size.height
-                                    let range = maxWeight - minWeight == 0
-                                        ? 1 : maxWeight - minWeight
+                                    let range = maxWeight - minWeight == 0 ? 1 : maxWeight - minWeight
                                     let pad: Double = 2
                                     ZStack {
                                         ForEach(0..<4) { i in
@@ -291,18 +302,17 @@ struct DashboardView: View {
                                             }
                                             .stroke(Color.secondary.opacity(0.1), lineWidth: 1)
                                         }
-                                        if last7DaysWeight.count > 1 {
+
+                                        if recentWeightLogs.count > 1 {
                                             Path { path in
-                                                for (i, entry) in last7DaysWeight.enumerated() {
-                                                    let x = w * CGFloat(i)
-                                                        / CGFloat(last7DaysWeight.count - 1)
-                                                    let n = (entry.weight - minWeight + pad)
-                                                        / (range + pad * 2)
+                                                for (i, entry) in recentWeightLogs.enumerated() {
+                                                    let xPosition = w * CGFloat(i) / CGFloat(recentWeightLogs.count - 1)
+                                                    let n = (entry.weight - minWeight + pad) / (range + pad * 2)
                                                     let y = h * CGFloat(1 - n)
                                                     if i == 0 {
-                                                        path.move(to: CGPoint(x: x, y: y))
+                                                        path.move(to: CGPoint(x: xPosition, y: y))
                                                     } else {
-                                                        path.addLine(to: CGPoint(x: x, y: y))
+                                                        path.addLine(to: CGPoint(x: xPosition, y: y))
                                                     }
                                                 }
                                             }
@@ -310,33 +320,68 @@ struct DashboardView: View {
                                                 lineWidth: 2.5, lineCap: .round,
                                                 lineJoin: .round))
                                         }
-                                        ForEach(0..<last7DaysWeight.count, id: \.self) { i in
-                                            let entry = last7DaysWeight[i]
-                                            let x = last7DaysWeight.count == 1
+
+                                        ForEach(Array(recentWeightLogs.enumerated()), id: \.element.id) { i, entry in
+                                            let x = recentWeightLogs.count == 1
                                                 ? w / 2
-                                                : w * CGFloat(i)
-                                                    / CGFloat(last7DaysWeight.count - 1)
-                                            let n = (entry.weight - minWeight + pad)
-                                                / (range + pad * 2)
+                                                : w * CGFloat(i) / CGFloat(recentWeightLogs.count - 1)
+                                            let n = (entry.weight - minWeight + pad) / (range + pad * 2)
                                             let y = h * CGFloat(1 - n)
+
                                             Circle().fill(Color.blue)
-                                                .frame(width: 8, height: 8)
+                                                .frame(width: 14, height: 14)
                                                 .position(x: x, y: y)
+                                                .onTapGesture { selectedWeightLog = entry }
+
                                             Text(String(format: "%.1f", entry.weight))
-                                                .font(.system(size: 9)).foregroundColor(.blue)
-                                                .position(x: x, y: max(y - 14, 10))
-                                            Text(dayLabel(entry.date))
                                                 .font(.system(size: 9))
+                                                .foregroundColor(.blue)
+                                                .position(x: x, y: max(y - 14, 10))
+                                                .onTapGesture { selectedWeightLog = entry }
+
+                                            Text(shortTimeString(entry.date))
+                                                .font(.system(size: 8))
                                                 .foregroundColor(.secondary)
                                                 .position(x: x, y: h + 12)
+                                                .onTapGesture { selectedWeightLog = entry }
                                         }
                                     }
                                 }
                                 .frame(height: 120).padding(.bottom, 20)
 
-                                if last7DaysWeight.count >= 2 {
-                                    let first = last7DaysWeight.first!.weight
-                                    let last = last7DaysWeight.last!.weight
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("Recent Logs")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+
+                                    ForEach(groupedRecentWeightLogs, id: \.date) { group in
+                                        VStack(alignment: .leading, spacing: 6) {
+                                            Text(dayLabel(group.date))
+                                                .font(.caption2)
+                                                .fontWeight(.semibold)
+                                                .foregroundColor(.secondary)
+
+                                            FlowLayout(spacing: 6) {
+                                                ForEach(group.logs) { log in
+                                                    HStack(spacing: 4) {
+                                                        Text(shortTimeString(log.date))
+                                                        Text(String(format: "%.1f kg", log.weight))
+                                                            .fontWeight(.semibold)
+                                                    }
+                                                    .font(.caption2)
+                                                    .padding(.horizontal, 8)
+                                                    .padding(.vertical, 5)
+                                                    .background(Color.blue.opacity(0.08))
+                                                    .cornerRadius(8)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if recentWeightLogs.count >= 2 {
+                                    let first = recentWeightLogs.first!.weight
+                                    let last = recentWeightLogs.last!.weight
                                     let diff = last - first
                                     HStack(spacing: 6) {
                                         Image(systemName: diff < 0
@@ -348,10 +393,10 @@ struct DashboardView: View {
                                                 diff < 0 ? .green
                                                 : diff > 0 ? .red : .secondary)
                                         Text(diff < 0
-                                             ? String(format: "%.1f kg lost this week 🎉", abs(diff))
+                                             ? String(format: "%.1f kg lower than 7 days ago 🎉", abs(diff))
                                              : diff > 0
-                                             ? String(format: "%.1f kg gained this week", diff)
-                                             : "Weight stable this week")
+                                             ? String(format: "%.1f kg higher than 7 days ago", diff)
+                                             : "Weight stable")
                                             .font(.caption)
                                             .foregroundColor(
                                                 diff < 0 ? .green
@@ -497,16 +542,16 @@ struct DashboardView: View {
                     healthKit.fetchAll()
                     recentMeals = ManualMeal.loadAll()
                     financeStore.refreshAll()
+                    weightLogs = WeightLog.loadAll()
                 }
 
                 // Dim overlay
-                if showingLogPanel || showingFinancePanel {
+                if showingLogPanel {
                     Color.black.opacity(0.3)
                         .ignoresSafeArea()
                         .onTapGesture {
                             withAnimation(.spring(response: 0.35)) {
                                 showingLogPanel = false
-                                showingFinancePanel = false
                                 dragOffset = 0
                             }
                         }
@@ -534,40 +579,19 @@ struct DashboardView: View {
                     }
                 }
 
-                // Finance panel (left) — uses shared store
-                if showingFinancePanel {
-                    HStack(spacing: 0) {
-                        FinanceQuickPanel(store: financeStore, onDismiss: {
-                            withAnimation(.spring(response: 0.35)) {
-                                showingFinancePanel = false
-                                dragOffset = 0
-                            }
-                        })
-                        .frame(width: screenWidth * 0.88)
-                        .transition(.move(edge: .leading))
-                        Spacer()
-                    }
-                }
             }
             .gesture(
                 DragGesture()
                     .onChanged { value in
-                        if !showingLogPanel && !showingFinancePanel {
-                            if value.translation.width < 0 {
-                                dragOffset = max(value.translation.width, -screenWidth * 0.88)
-                            } else if value.translation.width > 0 {
-                                dragOffset = min(value.translation.width, screenWidth * 0.88)
-                            }
+                        if !showingLogPanel && value.translation.width < 0 {
+                            dragOffset = max(value.translation.width, -screenWidth * 0.88)
                         }
                     }
                     .onEnded { value in
                         if value.translation.width < -60 && !showingLogPanel {
                             withAnimation(.spring(response: 0.35)) {
-                                showingLogPanel = true; dragOffset = 0
-                            }
-                        } else if value.translation.width > 60 && !showingFinancePanel {
-                            withAnimation(.spring(response: 0.35)) {
-                                showingFinancePanel = true; dragOffset = 0
+                                showingLogPanel = true
+                                dragOffset = 0
                             }
                         } else {
                             withAnimation(.spring(response: 0.35)) { dragOffset = 0 }
@@ -576,26 +600,49 @@ struct DashboardView: View {
             )
             .navigationTitle("Kelly Life")
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button(action: {
-                        withAnimation(.spring(response: 0.35)) { showingFinancePanel = true }
-                    }) {
-                        Image(systemName: "dollarsign.circle.fill")
-                            .foregroundColor(.green).font(.title3)
-                    }
-                }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: {
-                        withAnimation(.spring(response: 0.35)) { showingLogPanel = true }
-                    }) {
-                        Image(systemName: "fork.knife.circle.fill")
+                    Button(action: { showingQuickLogOptions = true }) {
+                        Image(systemName: "plus.circle.fill")
                             .foregroundColor(.green).font(.title3)
                     }
                 }
             }
         }
+        .sheet(isPresented: $showingWeightLogSheet) {
+            WeightLogEntryView { newLog in
+                WeightLog.save(newLog)
+                weightLogs = WeightLog.loadAll()
+            }
+        }
+        .sheet(isPresented: $showingAddTransactionSheet) {
+            AddTransactionView(store: financeStore)
+        }
+        .sheet(item: $selectedWeightLog) { log in
+            WeightLogDetailView(log: log) {
+                WeightLog.delete(log)
+                weightLogs = WeightLog.loadAll()
+            }
+        }
+        .confirmationDialog("What would you like to log?", isPresented: $showingQuickLogOptions, titleVisibility: .visible) {
+            Button("Log Meal") {
+                withAnimation(.spring(response: 0.35)) {
+                    showingLogPanel = true
+                    dragOffset = 0
+                }
+            }
+            Button("Log Weight") {
+                showingWeightLogSheet = true
+            }
+            Button("Log Finance Transaction") {
+                showingAddTransactionSheet = true
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Pick one log type to add now.")
+        }
         .onAppear {
             recentMeals = ManualMeal.loadAll()
+            weightLogs = WeightLog.loadAll()
             if !healthKit.isAuthorized { healthKit.requestAuthorization() }
         }
     }
@@ -613,6 +660,11 @@ struct DashboardView: View {
     }
     func timeString(_ date: Date) -> String {
         let f = DateFormatter(); f.timeStyle = .short; return f.string(from: date)
+    }
+    func shortTimeString(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f.string(from: date)
     }
     func resetDay() {
         totalCalories = 0; totalCarbs = 0; totalProtein = 0; totalFat = 0
@@ -880,7 +932,7 @@ struct FinanceQuickPanel: View {
             .refreshable { store.refreshAll() }
 
             Button(action: { showAddTransaction = true }) {
-                Label("Add Transaction", systemImage: "plus.circle.fill")
+                Label("Log Finance Transaction", systemImage: "plus.circle.fill")
                     .font(.headline).foregroundColor(.white)
                     .frame(maxWidth: .infinity).padding()
                     .background(Color.green).cornerRadius(14)
@@ -1062,6 +1114,165 @@ struct HealthStatCard: View {
             }
         }
         .padding(10).background(color.opacity(0.08)).cornerRadius(10)
+    }
+}
+
+// MARK: - Weight Log Model
+
+struct WeightLog: Identifiable, Codable, Hashable {
+    var id = UUID()
+    var weight: Double
+    var date: Date = Date()
+    var note: String = ""
+
+    static let storageKey = "weightLogs"
+
+    static func loadAll() -> [WeightLog] {
+        guard let data = UserDefaults.standard.data(forKey: storageKey),
+              let logs = try? JSONDecoder().decode([WeightLog].self, from: data)
+        else { return [] }
+        return logs.sorted { $0.date > $1.date }
+    }
+
+    static func save(_ log: WeightLog) {
+        var all = loadAll()
+        all.append(log)
+        if let data = try? JSONEncoder().encode(all) {
+            UserDefaults.standard.set(data, forKey: storageKey)
+        }
+    }
+
+    static func delete(_ log: WeightLog) {
+        var all = loadAll()
+        all.removeAll { $0.id == log.id }
+        if let data = try? JSONEncoder().encode(all) {
+            UserDefaults.standard.set(data, forKey: storageKey)
+        }
+    }
+
+    static func logs(for date: Date) -> [WeightLog] {
+        loadAll().filter { Calendar.current.isDate($0.date, inSameDayAs: date) }
+    }
+
+    static func latestWeight(for date: Date) -> Double? {
+        logs(for: date).sorted { $0.date > $1.date }.first?.weight
+    }
+
+    static func averageWeight(for date: Date) -> Double? {
+        let values = logs(for: date).map { $0.weight }
+        guard !values.isEmpty else { return nil }
+        return values.reduce(0, +) / Double(values.count)
+    }
+}
+
+// MARK: - Weight Log Entry View
+
+struct WeightLogEntryView: View {
+    let onSave: (WeightLog) -> Void
+    @Environment(\.dismiss) var dismiss
+    @State private var weight = ""
+    @State private var date = Date()
+    @State private var note = ""
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section("Weight") {
+                    HStack {
+                        TextField("e.g. 62.5", text: $weight)
+                            .keyboardType(.decimalPad)
+                        Text("kg").foregroundColor(.secondary)
+                    }
+                }
+
+                Section("Time") {
+                    DatePicker("Date & Time", selection: $date)
+                }
+
+                Section("Note Optional") {
+                    TextField("Morning, evening, after workout...", text: $note)
+                }
+
+                Section {
+                    Text("You can log more than once per day. The dashboard will show every value for the same day, such as morning and evening weight.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .navigationTitle("Log Weight")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Save") {
+                        guard let value = Double(weight) else { return }
+                        let log = WeightLog(weight: value, date: date, note: note)
+                        onSave(log)
+                        dismiss()
+                    }
+                    .fontWeight(.bold)
+                    .disabled(Double(weight) == nil)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Simple Flow Layout
+
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        let maxWidth = proposal.width ?? 300
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x + size.width > maxWidth && x > 0 {
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+
+        return CGSize(width: maxWidth, height: y + rowHeight)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x + size.width > bounds.maxX && x > bounds.minX {
+                x = bounds.minX
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            subview.place(
+                at: CGPoint(x: x, y: y),
+                proposal: ProposedViewSize(size)
+            )
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
     }
 }
 
@@ -1276,4 +1487,98 @@ struct NutritionBadge: View {
     }
 }
 
+
 #Preview { ContentView() }
+
+// MARK: - Weight Log Detail View
+
+struct WeightLogDetailView: View {
+    let log: WeightLog
+    let onDelete: () -> Void
+    @Environment(\.dismiss) var dismiss
+
+    var body: some View {
+        NavigationView {
+            List {
+                Section("Weight") {
+                    HStack {
+                        Label("Value", systemImage: "scalemass")
+                        Spacer()
+                        Text(String(format: "%.1f kg", log.weight))
+                            .fontWeight(.semibold)
+                            .foregroundColor(.blue)
+                    }
+                }
+
+                Section("Time") {
+                    HStack {
+                        Label("Date", systemImage: "calendar")
+                        Spacer()
+                        Text(dateString(log.date))
+                            .foregroundColor(.secondary)
+                    }
+                    HStack {
+                        Label("Time", systemImage: "clock")
+                        Spacer()
+                        Text(timeString(log.date))
+                            .foregroundColor(.secondary)
+                    }
+                    HStack {
+                        Label("Period", systemImage: timeIcon(log.date))
+                        Spacer()
+                        Text(periodLabel(log.date))
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                if !log.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Section("Note") {
+                        Text(log.note)
+                    }
+                }
+
+                Section {
+                    Button(role: .destructive) {
+                        onDelete()
+                        dismiss()
+                    } label: {
+                        Label("Delete this weight log", systemImage: "trash")
+                    }
+                }
+            }
+            .navigationTitle("Weight Detail")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+
+    func dateString(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.dateStyle = .full
+        return f.string(from: date)
+    }
+
+    func timeString(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.timeStyle = .short
+        return f.string(from: date)
+    }
+
+    func periodLabel(_ date: Date) -> String {
+        let hour = Calendar.current.component(.hour, from: date)
+        if hour < 12 { return "Morning" }
+        if hour < 18 { return "Afternoon" }
+        return "Evening"
+    }
+
+    func timeIcon(_ date: Date) -> String {
+        let hour = Calendar.current.component(.hour, from: date)
+        if hour < 12 { return "sunrise.fill" }
+        if hour < 18 { return "sun.max.fill" }
+        return "moon.fill"
+    }
+}
