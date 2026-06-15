@@ -37,10 +37,15 @@ struct DashboardView: View {
 
     var goal: Double { Double(profile.dailyCalorieGoal) }
 
+    // Flexible goal: base + active calories burned today
+    var adjustedGoal: Int {
+        let active = healthKit.isAuthorized ? Int(healthKit.activeCalories) : 0
+        return Int(goal) + active
+    }
+
     var last7DaysWeight: [(date: Date, weight: Double)] {
         (0..<7).compactMap { offset -> (Date, Double)? in
-            let date = Calendar.current.date(
-                byAdding: .day, value: -offset, to: Date())!
+            let date = Calendar.current.date(byAdding: .day, value: -offset, to: Date())!
             if let w = calendarStore.weightForDate(date) { return (date, w) }
             return nil
         }.reversed()
@@ -62,10 +67,21 @@ struct DashboardView: View {
             .sorted { $0.date < $1.date }
     }
 
+    var remainingCalories: Int { adjustedGoal - totalCalories }
+
+    var remainingText: String {
+        if remainingCalories > 0 { return "\(remainingCalories) kcal left" }
+        if remainingCalories == 0 { return "Goal reached! 🎯" }
+        return "\(abs(remainingCalories)) kcal over"
+    }
+
+    var ringColor: Color {
+        totalCalories > adjustedGoal ? .red : .green
+    }
+
     var body: some View {
         NavigationView {
             ZStack {
-                // Main content
                 ScrollView {
                     VStack(spacing: 20) {
 
@@ -89,30 +105,70 @@ struct DashboardView: View {
                         ZStack {
                             Circle()
                                 .stroke(Color.green.opacity(0.15), lineWidth: 16)
-                                .frame(width: 160, height: 160)
+                                .frame(width: 180, height: 180)
                             Circle()
                                 .trim(from: 0, to: min(
-                                    CGFloat(totalCalories) / CGFloat(max(goal, 1)), 1.0))
+                                    CGFloat(totalCalories) / CGFloat(max(adjustedGoal, 1)), 1.0))
                                 .stroke(
-                                    totalCalories > Int(goal) ? Color.red : Color.green,
+                                    ringColor,
                                     style: StrokeStyle(lineWidth: 16, lineCap: .round)
                                 )
-                                .frame(width: 160, height: 160)
+                                .frame(width: 180, height: 180)
                                 .rotationEffect(.degrees(-90))
                                 .animation(.easeInOut, value: totalCalories)
+                                .animation(.easeInOut, value: adjustedGoal)
+
                             VStack(spacing: 4) {
                                 Text("\(totalCalories)")
-                                    .font(.system(size: 32, weight: .bold))
+                                    .font(.system(size: 34, weight: .bold))
+                                    .foregroundColor(totalCalories > adjustedGoal ? .red : .primary)
+
+                                // Show breakdown if exercise data available
+                                if healthKit.isAuthorized && healthKit.activeCalories > 0 {
+                                    HStack(spacing: 4) {
+                                        Text("\(Int(goal))")
+                                            .font(.caption2).foregroundColor(.secondary)
+                                        Text("+")
+                                            .font(.caption2).foregroundColor(.secondary)
+                                        Text("\(Int(healthKit.activeCalories))🔥")
+                                            .font(.caption2).foregroundColor(.orange)
+                                    }
+                                    Text("= \(adjustedGoal) kcal")
+                                        .font(.caption).foregroundColor(.green)
+                                } else {
+                                    Text("of \(Int(goal)) kcal")
+                                        .font(.caption).foregroundColor(.secondary)
+                                }
+
+                                Text(remainingText)
+                                    .font(.caption2)
                                     .foregroundColor(
-                                        totalCalories > Int(goal) ? .red : .primary)
-                                Text("of \(Int(goal)) kcal")
-                                    .font(.caption).foregroundColor(.secondary)
-                                Text(remainingText).font(.caption2)
-                                    .foregroundColor(
-                                        totalCalories > Int(goal) ? .red : .green)
+                                        remainingCalories < 0 ? .red
+                                        : remainingCalories == 0 ? .green : .green)
+                                    .fontWeight(.medium)
                             }
                         }
                         .padding(.top, 8)
+
+                        // Exercise bonus banner
+                        if healthKit.isAuthorized && healthKit.activeCalories > 0 {
+                            HStack(spacing: 8) {
+                                Image(systemName: "flame.fill").foregroundColor(.orange)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Exercise bonus: +\(Int(healthKit.activeCalories)) kcal")
+                                        .font(.caption).fontWeight(.semibold)
+                                    Text("Your goal increased from \(Int(goal)) to \(adjustedGoal) kcal today")
+                                        .font(.caption2).foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(.green).font(.caption)
+                            }
+                            .padding(10)
+                            .background(Color.orange.opacity(0.08))
+                            .cornerRadius(12)
+                            .padding(.horizontal)
+                        }
 
                         // Macro cards
                         HStack(spacing: 12) {
@@ -147,8 +203,7 @@ struct DashboardView: View {
                                         VStack(alignment: .leading, spacing: 2) {
                                             Text(meal.name)
                                                 .font(.subheadline).fontWeight(.medium)
-                                            Text(meal.mealType.emoji + " "
-                                                 + meal.mealType.rawValue)
+                                            Text(meal.mealType.emoji + " " + meal.mealType.rawValue)
                                                 .font(.caption2).foregroundColor(.secondary)
                                         }
                                         Spacer()
@@ -166,8 +221,7 @@ struct DashboardView: View {
                         if !upcomingEvents.isEmpty {
                             VStack(alignment: .leading, spacing: 10) {
                                 HStack {
-                                    Image(systemName: "calendar")
-                                        .foregroundColor(.purple)
+                                    Image(systemName: "calendar").foregroundColor(.purple)
                                     Text("Upcoming Events").font(.headline)
                                     Spacer()
                                 }
@@ -336,16 +390,15 @@ struct DashboardView: View {
                             }
 
                             if healthKit.isAuthorized {
+                                // Steps
                                 VStack(spacing: 6) {
                                     HStack {
                                         Label("\(healthKit.steps) steps",
                                               systemImage: "figure.walk")
                                             .font(.subheadline)
-                                            .foregroundColor(
-                                                healthKit.stepsGoalMet ? .green : .primary)
+                                            .foregroundColor(healthKit.stepsGoalMet ? .green : .primary)
                                         Spacer()
-                                        Text(String(format: "%.2f km",
-                                                    healthKit.distanceKm))
+                                        Text(String(format: "%.2f km", healthKit.distanceKm))
                                             .font(.caption).foregroundColor(.secondary)
                                         Text(healthKit.stepsGoalMet ? "✅" : "/ 10,000")
                                             .font(.caption).foregroundColor(.secondary)
@@ -353,6 +406,34 @@ struct DashboardView: View {
                                     ProgressView(value: healthKit.stepsProgress)
                                         .tint(healthKit.stepsGoalMet ? .green : .orange)
                                 }
+
+                                Divider()
+
+                                // Calorie summary row
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("Calorie Budget Today").font(.caption).foregroundColor(.secondary)
+                                        HStack(spacing: 4) {
+                                            Text("\(Int(goal))").font(.subheadline).fontWeight(.semibold)
+                                            Text("base").font(.caption2).foregroundColor(.secondary)
+                                            if healthKit.activeCalories > 0 {
+                                                Text("+").font(.caption2).foregroundColor(.secondary)
+                                                Text("\(Int(healthKit.activeCalories))").font(.subheadline).fontWeight(.semibold).foregroundColor(.orange)
+                                                Text("exercise").font(.caption2).foregroundColor(.orange)
+                                            }
+                                        }
+                                    }
+                                    Spacer()
+                                    VStack(alignment: .trailing, spacing: 4) {
+                                        Text("Total").font(.caption).foregroundColor(.secondary)
+                                        Text("\(adjustedGoal) kcal")
+                                            .font(.subheadline).fontWeight(.bold)
+                                            .foregroundColor(.green)
+                                    }
+                                }
+                                .padding(10)
+                                .background(Color.green.opacity(0.06))
+                                .cornerRadius(10)
 
                                 Divider()
 
@@ -379,17 +460,16 @@ struct DashboardView: View {
                                     HealthStatCard(
                                         icon: "fork.knife", label: "Net Calories",
                                         value: "\(Int(Double(totalCalories) - healthKit.activeCalories)) kcal",
-                                        color: .green, goalMet: true)
+                                        color: .green,
+                                        goalMet: Int(Double(totalCalories) - healthKit.activeCalories) <= Int(goal))
                                 }
 
                                 // Period status
                                 if healthKit.isPeriodDay {
                                     Divider()
-                                    Label("Period day today",
-                                          systemImage: "circle.fill")
+                                    Label("Period day today", systemImage: "circle.fill")
                                         .font(.caption).foregroundColor(.pink)
-                                } else if let days = healthKit.daysUntilNextPeriod,
-                                          days <= 5 {
+                                } else if let days = healthKit.daysUntilNextPeriod, days <= 5 {
                                     Divider()
                                     Label(
                                         "Period expected in \(days) day\(days == 1 ? "" : "s")",
@@ -397,7 +477,7 @@ struct DashboardView: View {
                                         .font(.caption).foregroundColor(.pink)
                                 }
                             } else {
-                                Text("Connect Apple Health to see your steps, sleep and activity data automatically")
+                                Text("Connect Apple Health to see your steps, sleep, activity and get a flexible calorie goal based on exercise")
                                     .font(.caption).foregroundColor(.secondary)
                                     .multilineTextAlignment(.center)
                                     .frame(maxWidth: .infinity).padding(.vertical, 8)
@@ -476,11 +556,9 @@ struct DashboardView: View {
                     .onChanged { value in
                         if !showingLogPanel && !showingFinancePanel {
                             if value.translation.width < 0 {
-                                dragOffset = max(value.translation.width,
-                                                 -screenWidth * 0.88)
+                                dragOffset = max(value.translation.width, -screenWidth * 0.88)
                             } else if value.translation.width > 0 {
-                                dragOffset = min(value.translation.width,
-                                                 screenWidth * 0.88)
+                                dragOffset = min(value.translation.width, screenWidth * 0.88)
                             }
                         }
                     }
@@ -530,13 +608,6 @@ struct DashboardView: View {
 
     // MARK: - Helpers
 
-    var remainingText: String {
-        let remaining = Int(goal) - totalCalories
-        if remaining > 0 { return "\(remaining) kcal left" }
-        if remaining == 0 { return "Goal reached! 🎯" }
-        return "\(abs(remaining)) kcal over"
-    }
-
     func dayLabel(_ date: Date) -> String {
         let f = DateFormatter(); f.dateFormat = "M/d"; return f.string(from: date)
     }
@@ -576,7 +647,6 @@ struct MonthFinanceSummary: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
 
-            // Header
             HStack {
                 Image(systemName: "dollarsign.circle.fill").foregroundColor(.green)
                 Text("\(monthName) Overview").font(.headline)
@@ -587,7 +657,7 @@ struct MonthFinanceSummary: View {
                 }
             }
 
-            // Stock section — today gain/loss + overall only, no per-ticker
+            // Stock section
             if !store.stockHoldings.isEmpty {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
@@ -597,9 +667,7 @@ struct MonthFinanceSummary: View {
                         Text(String(format: "$%.2f", store.totalStockValue))
                             .font(.subheadline).fontWeight(.bold)
                     }
-
                     HStack(spacing: 12) {
-                        // Today's gain/loss
                         VStack(alignment: .leading, spacing: 4) {
                             Text(store.isWeekend ? "vs Last Friday" : "Today")
                                 .font(.caption2).foregroundColor(.secondary)
@@ -609,21 +677,15 @@ struct MonthFinanceSummary: View {
                             )
                             .font(.title3).fontWeight(.bold)
                             .foregroundColor(store.todayStockGainLoss >= 0 ? .green : .red)
-                            Text(String(format: "%.2f%%",
-                                        store.todayStockGainLossPercent))
+                            Text(String(format: "%.2f%%", store.todayStockGainLossPercent))
                                 .font(.caption2)
-                                .foregroundColor(
-                                    store.todayStockGainLoss >= 0 ? .green : .red)
+                                .foregroundColor(store.todayStockGainLoss >= 0 ? .green : .red)
                         }
-                        .frame(maxWidth: .infinity)
-                        .padding(10)
-                        .background(
-                            store.todayStockGainLoss >= 0
-                            ? Color.green.opacity(0.08)
-                            : Color.red.opacity(0.08))
+                        .frame(maxWidth: .infinity).padding(10)
+                        .background(store.todayStockGainLoss >= 0
+                                    ? Color.green.opacity(0.08) : Color.red.opacity(0.08))
                         .cornerRadius(10)
 
-                        // Overall gain/loss
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Overall").font(.caption2).foregroundColor(.secondary)
                             Text(
@@ -632,18 +694,13 @@ struct MonthFinanceSummary: View {
                             )
                             .font(.title3).fontWeight(.bold)
                             .foregroundColor(store.totalStockGainLoss >= 0 ? .green : .red)
-                            Text(String(format: "%.2f%%",
-                                        store.totalStockGainLossPercent))
+                            Text(String(format: "%.2f%%", store.totalStockGainLossPercent))
                                 .font(.caption2)
-                                .foregroundColor(
-                                    store.totalStockGainLoss >= 0 ? .green : .red)
+                                .foregroundColor(store.totalStockGainLoss >= 0 ? .green : .red)
                         }
-                        .frame(maxWidth: .infinity)
-                        .padding(10)
-                        .background(
-                            store.totalStockGainLoss >= 0
-                            ? Color.green.opacity(0.08)
-                            : Color.red.opacity(0.08))
+                        .frame(maxWidth: .infinity).padding(10)
+                        .background(store.totalStockGainLoss >= 0
+                                    ? Color.green.opacity(0.08) : Color.red.opacity(0.08))
                         .cornerRadius(10)
                     }
                 }
@@ -665,8 +722,7 @@ struct MonthFinanceSummary: View {
                         .frame(width: 80, height: 80)
                         .rotationEffect(.degrees(-90))
                     VStack(spacing: 0) {
-                        Text(budget > 0
-                             ? "\(Int(min(spent / budget * 100, 999)))%" : "—")
+                        Text(budget > 0 ? "\(Int(min(spent / budget * 100, 999)))%" : "—")
                             .font(.system(size: 14, weight: .bold))
                             .foregroundColor(isOverBudget ? .red : .primary)
                         Text("used").font(.system(size: 9)).foregroundColor(.secondary)
@@ -699,14 +755,12 @@ struct MonthFinanceSummary: View {
                             .font(.subheadline).fontWeight(.bold)
                             .foregroundColor(isOverBudget ? .red : .blue)
                     }
-                }
-                .frame(maxWidth: .infinity)
+                }.frame(maxWidth: .infinity)
             }
 
             if budget > 0 {
                 ProgressView(value: min(spent / budget, 1.0))
-                    .tint(isOverBudget ? .red
-                          : spent / budget > 0.8 ? .orange : .green)
+                    .tint(isOverBudget ? .red : spent / budget > 0.8 ? .orange : .green)
                 Label(
                     isOverBudget
                         ? String(format: "Over monthly budget by $%.2f", abs(remaining))
@@ -720,32 +774,28 @@ struct MonthFinanceSummary: View {
                         : "checkmark.circle.fill"
                 )
                 .font(.caption)
-                .foregroundColor(
-                    isOverBudget ? .red : spent / budget > 0.8 ? .orange : .green)
+                .foregroundColor(isOverBudget ? .red : spent / budget > 0.8 ? .orange : .green)
             } else {
                 Text("Set a monthly budget in Finance to track spending")
                     .font(.caption).foregroundColor(.secondary)
             }
 
-            // CD maturing soon
+            // CDs maturing soon
             let maturingSoon = store.cdAccounts.filter {
                 $0.daysUntilMaturity <= 30 && !$0.isMatured
             }
             if !maturingSoon.isEmpty {
                 Divider()
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("CDs Maturing Soon")
-                        .font(.caption).foregroundColor(.secondary)
+                    Text("CDs Maturing Soon").font(.caption).foregroundColor(.secondary)
                     ForEach(maturingSoon) { cd in
                         HStack {
                             Image(systemName: "banknote").foregroundColor(.orange)
-                            Text(cd.bankName)
-                                .font(.caption).foregroundColor(.secondary)
+                            Text(cd.bankName).font(.caption).foregroundColor(.secondary)
                             Text(String(format: "$%.2f", cd.principal))
                                 .font(.caption).fontWeight(.medium)
                             Spacer()
-                            Text(cd.statusText)
-                                .font(.caption).fontWeight(.semibold)
+                            Text(cd.statusText).font(.caption).fontWeight(.semibold)
                                 .foregroundColor(cd.statusColor)
                         }
                     }
@@ -828,9 +878,7 @@ struct FinanceQuickPanel: View {
                         ForEach(recentTransactions) { t in
                             TransactionRow(
                                 transaction: t,
-                                onDelete: {
-                                    store.transactions.removeAll { $0.id == t.id }
-                                }
+                                onDelete: { store.transactions.removeAll { $0.id == t.id } }
                             )
                             .padding(.horizontal)
                         }
@@ -1164,8 +1212,7 @@ struct ManualMealEntryView: View {
                         TextField("e.g. 450", text: $calories).keyboardType(.numberPad)
                         Text("kcal").foregroundColor(.secondary)
                     }
-                    if !calories.isEmpty && carbs.isEmpty
-                        && protein.isEmpty && fat.isEmpty {
+                    if !calories.isEmpty && carbs.isEmpty && protein.isEmpty && fat.isEmpty {
                         Button(action: {
                             let est = estimatedMacros
                             carbs = String(format: "%.0f", est.carbs)
