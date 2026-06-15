@@ -789,14 +789,18 @@ enum FinancePeriod {
 // MARK: - Finance View
 
 struct FinanceView: View {
-    @StateObject private var store = FinanceStore()
+    @ObservedObject var store: FinanceStore   // ← injected, not @StateObject
     @State private var selectedPeriod: PeriodTab = .month
     @State private var showAddTransaction = false
     @State private var showBudgetSettings = false
     @State private var selectedTab: FinanceTab = .overview
 
-    enum PeriodTab: String, CaseIterable { case week = "Week"; case month = "Month"; case year = "Year" }
-    enum FinanceTab { case overview, transactions, trends, budget, stocks, cd }
+    enum PeriodTab: String, CaseIterable {
+        case week = "Week"; case month = "Month"; case year = "Year"
+    }
+    enum FinanceTab {
+        case overview, transactions, trends, budget, stocks, cd
+    }
 
     var period: FinancePeriod {
         switch selectedPeriod {
@@ -811,16 +815,23 @@ struct FinanceView: View {
                     ForEach(PeriodTab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }.pickerStyle(.segmented).padding(.horizontal).padding(.top, 8)
 
-                SummaryBanner(store: store, period: period).padding(.horizontal).padding(.top, 12)
+                SummaryBanner(store: store, period: period)
+                    .padding(.horizontal).padding(.top, 12)
 
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 4) {
-                        TabButton(title: "Overview", icon: "chart.pie", isSelected: selectedTab == .overview) { selectedTab = .overview }
-                        TabButton(title: "Records", icon: "list.bullet", isSelected: selectedTab == .transactions) { selectedTab = .transactions }
-                        TabButton(title: "Trends", icon: "chart.line.uptrend.xyaxis", isSelected: selectedTab == .trends) { selectedTab = .trends }
-                        TabButton(title: "Budget", icon: "target", isSelected: selectedTab == .budget) { selectedTab = .budget }
-                        TabButton(title: "Stocks", icon: "chart.bar.fill", isSelected: selectedTab == .stocks) { selectedTab = .stocks }
-                        TabButton(title: "CD", icon: "banknote", isSelected: selectedTab == .cd) { selectedTab = .cd }
+                        TabButton(title: "Overview", icon: "chart.pie",
+                                  isSelected: selectedTab == .overview) { selectedTab = .overview }
+                        TabButton(title: "Records", icon: "list.bullet",
+                                  isSelected: selectedTab == .transactions) { selectedTab = .transactions }
+                        TabButton(title: "Trends", icon: "chart.line.uptrend.xyaxis",
+                                  isSelected: selectedTab == .trends) { selectedTab = .trends }
+                        TabButton(title: "Budget", icon: "target",
+                                  isSelected: selectedTab == .budget) { selectedTab = .budget }
+                        TabButton(title: "Stocks", icon: "chart.bar.fill",
+                                  isSelected: selectedTab == .stocks) { selectedTab = .stocks }
+                        TabButton(title: "CD", icon: "banknote",
+                                  isSelected: selectedTab == .cd) { selectedTab = .cd }
                     }.padding(.horizontal)
                 }.padding(.top, 8)
 
@@ -841,8 +852,12 @@ struct FinanceView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Menu {
-                        Button(action: { showAddTransaction = true }) { Label("Add Transaction", systemImage: "plus") }
-                        Button(action: { showBudgetSettings = true }) { Label("Set Budget", systemImage: "target") }
+                        Button(action: { showAddTransaction = true }) {
+                            Label("Add Transaction", systemImage: "plus")
+                        }
+                        Button(action: { showBudgetSettings = true }) {
+                            Label("Set Budget", systemImage: "target")
+                        }
                     } label: { Image(systemName: "plus") }
                 }
             }
