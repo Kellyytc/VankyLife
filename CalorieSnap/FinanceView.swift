@@ -1075,38 +1075,101 @@ struct EditableTransactionRow: View {
     @State private var showEdit = false
 
     var dateString: String {
-        let f = DateFormatter(); f.dateFormat = "M/d HH:mm"; return f.string(from: transaction.date)
+        let f = DateFormatter()
+        f.dateFormat = "M/d HH:mm"
+        return f.string(from: transaction.date)
     }
+
     var body: some View {
         HStack(spacing: 12) {
-            Text(transaction.emoji).font(.system(size: 26))
+            Text(transaction.emoji)
+                .font(.system(size: 26))
                 .frame(width: 44, height: 44)
-                .background(transaction.type == .income ? Color.green.opacity(0.1) : Color.red.opacity(0.1))
+                .background(
+                    transaction.type == .income
+                    ? Color.green.opacity(0.1)
+                    : Color.red.opacity(0.1)
+                )
                 .cornerRadius(10)
+
             VStack(alignment: .leading, spacing: 4) {
-                Text(transaction.title).font(.subheadline).fontWeight(.medium)
+                Text(transaction.title)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+
                 HStack(spacing: 6) {
-                    Text(transaction.category.emoji + " " + transaction.category.rawValue).font(.caption2).foregroundColor(.secondary)
-                    Text("·").foregroundColor(.secondary)
-                    Text(dateString).font(.caption2).foregroundColor(.secondary)
+                    Text(
+                        transaction.category.emoji
+                        + " "
+                        + transaction.category.rawValue
+                    )
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+
+                    Text("·")
+                        .foregroundColor(.secondary)
+
+                    Text(dateString)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
                 }
-                if !transaction.note.isEmpty { Text(transaction.note).font(.caption2).foregroundColor(.secondary).lineLimit(1) }
+
+                if !transaction.note.isEmpty {
+                    Text(transaction.note)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
             }
+
             Spacer()
+
             VStack(alignment: .trailing, spacing: 4) {
-                Text((transaction.type == .income ? "+" : "-") + String(format: "$%.2f", transaction.amount))
-                    .font(.subheadline).fontWeight(.bold)
-                    .foregroundColor(transaction.type == .income ? .green : .red)
-                Image(systemName: "pencil.circle").font(.caption).foregroundColor(.secondary.opacity(0.5))
+                Text(
+                    (transaction.type == .income ? "+" : "-")
+                    + String(format: "$%.2f", transaction.amount)
+                )
+                .font(.subheadline)
+                .fontWeight(.bold)
+                .foregroundColor(
+                    transaction.type == .income ? .green : .red
+                )
+
+                Image(systemName: "pencil.circle")
+                    .font(.caption)
+                    .foregroundColor(.secondary.opacity(0.5))
             }
         }
-        .padding().background(.regularMaterial).cornerRadius(12)
-        .contentShape(Rectangle()).onTapGesture { showEdit = true }
-        .swipeActions(edge: .leading) { Button { showEdit = true } label: { Label("Edit", systemImage: "pencil") }.tint(.blue) }
-        .swipeActions(edge: .trailing) {
-            Button(role: .destructive) { store.transactions.removeAll { $0.id == transaction.id } } label: { Label("Delete", systemImage: "trash") }
+        .padding()
+        .background(.regularMaterial)
+        .cornerRadius(12)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            showEdit = true
         }
-        .sheet(isPresented: $showEdit) { EditTransactionView(transaction: transaction, store: store) }
+        .swipeActions(edge: .leading) {
+            Button {
+                showEdit = true
+            } label: {
+                Label("Edit", systemImage: "pencil")
+            }
+            .tint(.blue)
+        }
+        .swipeActions(edge: .trailing) {
+            Button(role: .destructive) {
+                store.transactions.removeAll {
+                    $0.id == transaction.id
+                }
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
+        .sheet(isPresented: $showEdit) {
+            EditTransactionView(
+                transaction: transaction,
+                store: store
+            )
+        }
     }
 }
 
@@ -1669,43 +1732,106 @@ struct StocksTab: View {
 struct StockHoldingRow: View {
     let stock: StockHolding
     let isFetching: Bool
-    let onTap: () -> Void; let onEdit: () -> Void
-    let onDelete: () -> Void; let onRefresh: () -> Void
+
+    let onTap: () -> Void
+    let onEdit: () -> Void
+    let onDelete: () -> Void
+    let onRefresh: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .center, spacing: 2) {
                 if isFetching {
-                    ProgressView().scaleEffect(0.7).frame(width: 20, height: 20)
+                    ProgressView()
+                        .scaleEffect(0.7)
+                        .frame(width: 20, height: 20)
                 } else {
-                    Text(stock.symbol).font(.headline).fontWeight(.bold)
+                    Text(stock.symbol)
+                        .font(.headline)
+                        .fontWeight(.bold)
                 }
-                Text(String(format: "%.4f sh", stock.shares)).font(.caption2).foregroundColor(.secondary)
+
+                Text(String(format: "%.4f sh", stock.shares))
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
             }
-            .frame(width: 70).padding(8).background(Color.blue.opacity(0.1)).cornerRadius(10)
+            .frame(width: 70)
+            .padding(8)
+            .background(Color.blue.opacity(0.1))
+            .cornerRadius(10)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(String(format: "Avg $%.2f → $%.2f", stock.avgBuyPrice, stock.currentPrice))
-                    .font(.caption).foregroundColor(.secondary)
-                Text(String(format: "Value: $%.2f", stock.totalValue)).font(.subheadline).fontWeight(.medium)
+                Text(
+                    String(
+                        format: "Avg $%.2f → $%.2f",
+                        stock.avgBuyPrice,
+                        stock.currentPrice
+                    )
+                )
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+                Text(
+                    String(
+                        format: "Value: $%.2f",
+                        stock.totalValue
+                    )
+                )
+                .font(.subheadline)
+                .fontWeight(.medium)
             }
+
             Spacer()
+
             VStack(alignment: .trailing, spacing: 4) {
-                Text((stock.gainLoss >= 0 ? "+" : "") + String(format: "$%.2f", stock.gainLoss))
-                    .font(.subheadline).fontWeight(.bold).foregroundColor(stock.gainLoss >= 0 ? .green : .red)
-                Text(String(format: "%.2f%%", stock.gainLossPercent))
-                    .font(.caption2).foregroundColor(stock.gainLoss >= 0 ? .green : .red)
+                Text(
+                    (stock.gainLoss >= 0 ? "+" : "")
+                    + String(format: "$%.2f", stock.gainLoss)
+                )
+                .font(.subheadline)
+                .fontWeight(.bold)
+                .foregroundColor(
+                    stock.gainLoss >= 0 ? .green : .red
+                )
+
+                Text(
+                    String(
+                        format: "%.2f%%",
+                        stock.gainLossPercent
+                    )
+                )
+                .font(.caption2)
+                .foregroundColor(
+                    stock.gainLoss >= 0 ? .green : .red
+                )
             }
-            Image(systemName: "chevron.right").font(.caption2).foregroundColor(.secondary)
+
+            Image(systemName: "chevron.right")
+                .font(.caption2)
+                .foregroundColor(.secondary)
         }
-        .padding().background(.regularMaterial).cornerRadius(12)
-        .contentShape(Rectangle()).onTapGesture { onTap() }
+        .padding()
+        .background(.regularMaterial)
+        .cornerRadius(12)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onTap()
+        }
         .swipeActions(edge: .leading) {
-            Button(action: onEdit) { Label("Edit", systemImage: "pencil") }.tint(.blue)
-            Button(action: onRefresh) { Label("Refresh", systemImage: "arrow.clockwise") }.tint(.green)
+            Button(action: onEdit) {
+                Label("Edit", systemImage: "pencil")
+            }
+            .tint(.blue)
         }
         .swipeActions(edge: .trailing) {
-            Button(role: .destructive, action: onDelete) { Label("Delete All", systemImage: "trash") }
+            Button(role: .destructive, action: onDelete) {
+                Label("Delete", systemImage: "trash")
+            }
+
+            Button(action: onRefresh) {
+                Label("Refresh", systemImage: "arrow.clockwise")
+            }
+            .tint(.green)
         }
     }
 }
@@ -2121,9 +2247,23 @@ struct CDRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                VStack(alignment: .leading, spacing: 4) { Text(cd.bankName).font(.headline); Text(String(format: "%.2f%% APY · %d days", cd.annualRate, cd.termDays)).font(.caption).foregroundColor(.secondary) }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(cd.bankName).font(.headline)
+                    Text(String(format: "%.2f%% APY · %d days", cd.annualRate, cd.termDays))
+                        .font(.caption).foregroundColor(.secondary)
+                }
                 Spacer()
-                VStack(alignment: .trailing, spacing: 4) { Text(cd.statusText).font(.caption).fontWeight(.semibold).foregroundColor(cd.statusColor); Text("Matures \(maturityString)").font(.caption2).foregroundColor(.secondary) }
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text(cd.statusText).font(.caption).fontWeight(.semibold)
+                        .foregroundColor(cd.statusColor)
+                    Text("Matures \(maturityString)")
+                        .font(.caption2).foregroundColor(.secondary)
+                }
+                Button(action: onEdit) {
+                    Image(systemName: "pencil.circle.fill")
+                        .font(.title3).foregroundColor(.secondary.opacity(0.6))
+                }
+                .padding(.leading, 4)
             }
             HStack {
                 VStack(alignment: .leading, spacing: 2) { Text("Principal").font(.caption2).foregroundColor(.secondary); Text(String(format: "$%.2f", cd.principal)).font(.subheadline).fontWeight(.semibold) }
