@@ -1572,18 +1572,43 @@ struct StocksTab: View {
     @State private var showingAllTx = false
     @State private var editingStock: StockHolding? = nil
     @State private var detailStock: StockHolding? = nil
+    @State private var stockSearchText = ""
+
+    var filteredHoldings: [StockHolding] {
+        let query = stockSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !query.isEmpty else {
+            return store.stockHoldings
+        }
+
+        return store.stockHoldings.filter { stock in
+            stock.symbol.localizedCaseInsensitiveContains(query)
+        }
+    }
 
     var displayedHoldings: [StockHolding] {
-        showingAllHoldings ? store.stockHoldings : Array(store.stockHoldings.prefix(5))
+        if !stockSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return filteredHoldings
+        }
+
+        return showingAllHoldings
+            ? filteredHoldings
+            : Array(filteredHoldings.prefix(5))
     }
+
     var displayedTx: [StockTransaction] {
         let sorted = store.stockTransactions.sorted { $0.date > $1.date }
         return showingAllTx ? sorted : Array(sorted.prefix(5))
     }
 
     var lastFetchString: String {
-        guard let t = store.lastPriceFetchTime else { return "Never fetched" }
-        let f = DateFormatter(); f.timeStyle = .short; return "Updated \(f.string(from: t))"
+        guard let t = store.lastPriceFetchTime else {
+            return "Never fetched"
+        }
+
+        let f = DateFormatter()
+        f.timeStyle = .short
+        return "Updated \(f.string(from: t))"
     }
 
     var body: some View {
@@ -1592,39 +1617,65 @@ struct StocksTab: View {
             // Portfolio summary
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Text("Portfolio Summary").font(.headline)
+                    Text("Portfolio Summary")
+                        .font(.headline)
+
                     Spacer()
-                    // Live fetch button
-                    Button(action: { store.fetchAllPricesFromYahoo() }) {
+
+                    Button(action: {
+                        store.fetchAllPricesFromYahoo()
+                    }) {
                         HStack(spacing: 4) {
                             if store.isFetchingPrices {
-                                ProgressView().scaleEffect(0.7)
+                                ProgressView()
+                                    .scaleEffect(0.7)
                             } else {
                                 Image(systemName: "arrow.clockwise.circle.fill")
                                     .foregroundColor(.green)
                             }
-                            Text(store.isFetchingPrices ? "Fetching..." : "Refresh")
-                                .font(.caption).foregroundColor(.green)
+
+                            Text(
+                                store.isFetchingPrices
+                                ? "Fetching..."
+                                : "Refresh"
+                            )
+                            .font(.caption)
+                            .foregroundColor(.green)
                         }
-                    }.disabled(store.isFetchingPrices)
+                    }
+                    .disabled(store.isFetchingPrices)
                 }
 
-                // Market status + last fetch
                 HStack(spacing: 6) {
-                    Circle().fill(store.marketStatusColor).frame(width: 8, height: 8)
-                    Text(store.marketStatusText).font(.caption2).foregroundColor(.secondary)
+                    Circle()
+                        .fill(store.marketStatusColor)
+                        .frame(width: 8, height: 8)
+
+                    Text(store.marketStatusText)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+
                     Spacer()
-                    Text(lastFetchString).font(.caption2).foregroundColor(.secondary)
+
+                    Text(lastFetchString)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
                 }
 
-                // Fetch errors
                 if !store.fetcher.fetchErrors.isEmpty {
                     VStack(alignment: .leading, spacing: 2) {
-                        ForEach(Array(store.fetcher.fetchErrors), id: \.key) { sym, err in
+                        ForEach(
+                            Array(store.fetcher.fetchErrors),
+                            id: \.key
+                        ) { sym, err in
                             HStack(spacing: 4) {
                                 Image(systemName: "exclamationmark.triangle.fill")
-                                    .font(.caption2).foregroundColor(.orange)
-                                Text("\(sym): \(err)").font(.caption2).foregroundColor(.orange)
+                                    .font(.caption2)
+                                    .foregroundColor(.orange)
+
+                                Text("\(sym): \(err)")
+                                    .font(.caption2)
+                                    .foregroundColor(.orange)
                             }
                         }
                     }
@@ -1632,96 +1683,314 @@ struct StocksTab: View {
 
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Total Value").font(.caption).foregroundColor(.secondary)
-                        Text(String(format: "$%.2f", store.totalStockValue)).font(.title2).fontWeight(.bold)
+                        Text("Total Value")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                        Text(
+                            String(
+                                format: "$%.2f",
+                                store.totalStockValue
+                            )
+                        )
+                        .font(.title2)
+                        .fontWeight(.bold)
                     }
+
                     Spacer()
+
                     VStack(alignment: .trailing, spacing: 4) {
-                        Text("Overall Gain/Loss").font(.caption).foregroundColor(.secondary)
-                        Text((store.totalStockGainLoss >= 0 ? "+" : "") + String(format: "$%.2f", store.totalStockGainLoss))
-                            .font(.title2).fontWeight(.bold).foregroundColor(store.totalStockGainLoss >= 0 ? .green : .red)
-                        Text(String(format: "%.2f%%", store.totalStockGainLossPercent))
-                            .font(.caption).foregroundColor(store.totalStockGainLoss >= 0 ? .green : .red)
+                        Text("Overall Gain/Loss")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                        Text(
+                            (store.totalStockGainLoss >= 0 ? "+" : "")
+                            + String(
+                                format: "$%.2f",
+                                store.totalStockGainLoss
+                            )
+                        )
+                        .font(.title2)
+                        .fontWeight(.bold)
+                        .foregroundColor(
+                            store.totalStockGainLoss >= 0
+                            ? .green
+                            : .red
+                        )
+
+                        Text(
+                            String(
+                                format: "%.2f%%",
+                                store.totalStockGainLossPercent
+                            )
+                        )
+                        .font(.caption)
+                        .foregroundColor(
+                            store.totalStockGainLoss >= 0
+                            ? .green
+                            : .red
+                        )
                     }
                 }
+
                 Divider()
+
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(store.isWeekend ? "vs Last Friday Close" : "Today's Change")
-                            .font(.caption).foregroundColor(.secondary)
-                        Text((store.todayStockGainLoss >= 0 ? "+" : "") + String(format: "$%.2f", store.todayStockGainLoss))
-                            .font(.title3).fontWeight(.bold).foregroundColor(store.todayStockGainLoss >= 0 ? .green : .red)
+                        Text(
+                            store.isWeekend
+                            ? "vs Last Friday Close"
+                            : "Today's Change"
+                        )
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                        Text(
+                            (store.todayStockGainLoss >= 0 ? "+" : "")
+                            + String(
+                                format: "$%.2f",
+                                store.todayStockGainLoss
+                            )
+                        )
+                        .font(.title3)
+                        .fontWeight(.bold)
+                        .foregroundColor(
+                            store.todayStockGainLoss >= 0
+                            ? .green
+                            : .red
+                        )
                     }
+
                     Spacer()
-                    Text((store.todayStockGainLossPercent >= 0 ? "+" : "") + String(format: "%.2f%%", store.todayStockGainLossPercent))
-                        .font(.subheadline).fontWeight(.bold)
-                        .foregroundColor(store.todayStockGainLoss >= 0 ? .green : .red)
-                        .padding(.horizontal, 10).padding(.vertical, 6)
-                        .background(store.todayStockGainLoss >= 0 ? Color.green.opacity(0.1) : Color.red.opacity(0.1))
-                        .cornerRadius(8)
+
+                    Text(
+                        (store.todayStockGainLossPercent >= 0 ? "+" : "")
+                        + String(
+                            format: "%.2f%%",
+                            store.todayStockGainLossPercent
+                        )
+                    )
+                    .font(.subheadline)
+                    .fontWeight(.bold)
+                    .foregroundColor(
+                        store.todayStockGainLoss >= 0
+                        ? .green
+                        : .red
+                    )
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        store.todayStockGainLoss >= 0
+                        ? Color.green.opacity(0.1)
+                        : Color.red.opacity(0.1)
+                    )
+                    .cornerRadius(8)
                 }
 
-                // Yahoo Finance note
-                Text("Prices via Yahoo Finance · Auto-refresh every 5 min · Pull down to refresh now")
-                    .font(.caption2).foregroundColor(.secondary)
+                Text(
+                    "Prices via Yahoo Finance · Auto-refresh every 5 min · Pull down to refresh now"
+                )
+                .font(.caption2)
+                .foregroundColor(.secondary)
 
-            }.padding().background(.regularMaterial).cornerRadius(16)
+            }
+            .padding()
+            .background(.regularMaterial)
+            .cornerRadius(16)
 
-            
+            // SEARCH BAR
+            HStack(spacing: 10) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundColor(.secondary)
+
+                TextField(
+                    "Search your holdings (e.g. AAPL)",
+                    text: $stockSearchText
+                )
+                .textInputAutocapitalization(.characters)
+                .autocorrectionDisabled()
+
+                if !stockSearchText.isEmpty {
+                    Button(action: {
+                        stockSearchText = ""
+                    }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(.regularMaterial)
+            .cornerRadius(12)
 
             // Holdings
-            if !store.stockHoldings.isEmpty {
+            if !filteredHoldings.isEmpty {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Holdings (\(store.stockHoldings.count))").font(.headline)
+
+                    Text(
+                        stockSearchText.isEmpty
+                        ? "Holdings (\(store.stockHoldings.count))"
+                        : "Search Results (\(filteredHoldings.count))"
+                    )
+                    .font(.headline)
+
                     ForEach(displayedHoldings) { stock in
                         StockHoldingRow(
                             stock: stock,
                             isFetching: store.fetcher.fetchingSymbols.contains(stock.symbol),
-                            onTap: { detailStock = stock },
-                            onEdit: { editingStock = stock },
-                            onDelete: { store.deleteSymbol(stock.symbol) },
-                            onRefresh: { store.fetchSinglePrice(symbol: stock.symbol) }
+                            onTap: {
+                                detailStock = stock
+                            },
+                            onEdit: {
+                                editingStock = stock
+                            },
+                            onDelete: {
+                                store.deleteSymbol(stock.symbol)
+                            },
+                            onRefresh: {
+                                store.fetchSinglePrice(
+                                    symbol: stock.symbol
+                                )
+                            }
                         )
                     }
-                    if store.stockHoldings.count > 5 {
-                        Button(action: { withAnimation { showingAllHoldings.toggle() } }) {
-                            Text(showingAllHoldings ? "Show less" : "Show \(store.stockHoldings.count - 5) more...")
-                                .font(.caption).foregroundColor(.green).frame(maxWidth: .infinity, alignment: .center)
+
+                    if stockSearchText.isEmpty
+                        && store.stockHoldings.count > 5 {
+
+                        Button(action: {
+                            withAnimation {
+                                showingAllHoldings.toggle()
+                            }
+                        }) {
+                            Text(
+                                showingAllHoldings
+                                ? "Show less"
+                                : "Show \(store.stockHoldings.count - 5) more..."
+                            )
+                            .font(.caption)
+                            .foregroundColor(.green)
+                            .frame(
+                                maxWidth: .infinity,
+                                alignment: .center
+                            )
                         }
                     }
-                }.padding().background(.regularMaterial).cornerRadius(16)
+                }
+                .padding()
+                .background(.regularMaterial)
+                .cornerRadius(16)
+
             } else {
                 VStack(spacing: 12) {
-                    Image(systemName: "chart.bar.fill").font(.system(size: 50)).foregroundColor(.secondary.opacity(0.4))
-                    Text("No stock holdings").font(.subheadline).foregroundColor(.secondary)
-                    Text("Tap + to record a stock purchase").font(.caption).foregroundColor(.secondary)
-                }.frame(maxWidth: .infinity).padding(.vertical, 30)
+
+                    Image(
+                        systemName:
+                            stockSearchText.isEmpty
+                            ? "chart.bar.fill"
+                            : "magnifyingglass"
+                    )
+                    .font(.system(size: 50))
+                    .foregroundColor(
+                        .secondary.opacity(0.4)
+                    )
+
+                    Text(
+                        stockSearchText.isEmpty
+                        ? "No stock holdings"
+                        : "No matching holdings"
+                    )
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+
+                    Text(
+                        stockSearchText.isEmpty
+                        ? "Tap + to record a stock purchase"
+                        : "Try another ticker symbol"
+                    )
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 30)
             }
 
-            Button(action: { showAddStock = true }) {
-                Label("Record Stock Purchase / Sale", systemImage: "plus.circle.fill")
-                    .font(.headline).foregroundColor(.white)
-                    .frame(maxWidth: .infinity).padding().background(Color.green).cornerRadius(14)
+            Button(action: {
+                showAddStock = true
+            }) {
+                Label(
+                    "Record Stock Purchase / Sale",
+                    systemImage: "plus.circle.fill"
+                )
+                .font(.headline)
+                .foregroundColor(.white)
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(Color.green)
+                .cornerRadius(14)
             }
 
             if !store.stockTransactions.isEmpty {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("All Transactions (\(store.stockTransactions.count))").font(.headline)
+
+                    Text(
+                        "All Transactions (\(store.stockTransactions.count))"
+                    )
+                    .font(.headline)
+
                     ForEach(displayedTx) { tx in
-                        StockTransactionRow(tx: tx, onDelete: { store.stockTransactions.removeAll { $0.id == tx.id } })
+                        StockTransactionRow(
+                            tx: tx,
+                            onDelete: {
+                                store.stockTransactions.removeAll {
+                                    $0.id == tx.id
+                                }
+                            }
+                        )
                     }
+
                     if store.stockTransactions.count > 5 {
-                        Button(action: { withAnimation { showingAllTx.toggle() } }) {
-                            Text(showingAllTx ? "Show less" : "Show \(store.stockTransactions.count - 5) more...")
-                                .font(.caption).foregroundColor(.green).frame(maxWidth: .infinity, alignment: .center)
+                        Button(action: {
+                            withAnimation {
+                                showingAllTx.toggle()
+                            }
+                        }) {
+                            Text(
+                                showingAllTx
+                                ? "Show less"
+                                : "Show \(store.stockTransactions.count - 5) more..."
+                            )
+                            .font(.caption)
+                            .foregroundColor(.green)
+                            .frame(
+                                maxWidth: .infinity,
+                                alignment: .center
+                            )
                         }
                     }
-                }.padding().background(.regularMaterial).cornerRadius(16)
+                }
+                .padding()
+                .background(.regularMaterial)
+                .cornerRadius(16)
             }
         }
-        .sheet(isPresented: $showAddStock) { AddStockTransactionView(store: store) }
-        .sheet(item: $editingStock) { stock in EditStockView(stock: stock, store: store) }
-        .sheet(item: $detailStock) { stock in StockDetailView(stock: stock, store: store) }
+        .sheet(isPresented: $showAddStock) {
+            AddStockTransactionView(store: store)
+        }
+        .sheet(item: $editingStock) { stock in
+            EditStockView(
+                stock: stock,
+                store: store
+            )
+        }
+        .sheet(item: $detailStock) { stock in
+            StockDetailView(
+                stock: stock,
+                store: store
+            )
+        }
     }
 }
 
@@ -2383,63 +2652,215 @@ struct AddCDView: View {
 // MARK: - Add Transaction View
 
 struct AddTransactionView: View {
-    @ObservedObject var store: FinanceStore; @Environment(\.dismiss) var dismiss
-    @State private var title = ""; @State private var amount = ""
-    @State private var runningTotal: Double = 0; @State private var entries: [Double] = []
-    @State private var type: TransactionType = .expense; @State private var category: TransactionCategory = .food
-    @State private var date = Date(); @State private var note = ""
+    @ObservedObject var store: FinanceStore
+    @Environment(\.dismiss) var dismiss
+
+    @State private var title = ""
+    @State private var amountText = ""
+    @State private var runningTotal: Double = 0
+    @State private var entries: [Double] = []
+    @State private var type: TransactionType = .expense
+    @State private var category: TransactionCategory = .food
+    @State private var date = Date()
+    @State private var note = ""
+
     var filteredCategories: [TransactionCategory] {
-        type == .income ? TransactionCategory.allCases.filter { $0.isIncomeType } : TransactionCategory.allCases.filter { !$0.isIncomeType }
+        type == .income
+            ? TransactionCategory.allCases.filter { $0.isIncomeType }
+            : TransactionCategory.allCases.filter { !$0.isIncomeType }
     }
+
+    var currentAmount: Double { Double(amountText) ?? 0 }
+    var canAdd: Bool { currentAmount > 0 }
+
     var body: some View {
         NavigationView {
             Form {
                 Section("Type") {
-                    Picker("Type", selection: $type) { ForEach(TransactionType.allCases, id: \.self) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented)
-                        .onChange(of: type) { category = filteredCategories.first ?? .other }
-                }
-                Section("Category") { Picker("Category", selection: $category) { ForEach(filteredCategories, id: \.self) { Text($0.emoji + " " + $0.rawValue).tag($0) } }.pickerStyle(.wheel).frame(height: 120) }
-                Section("Title (optional)") { TextField("Defaults to category name", text: $title) }
-                Section("Amount") {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Total").font(.caption).foregroundColor(.secondary)
-                                Text(String(format: "$%.2f", runningTotal)).font(.system(size: 32, weight: .bold)).foregroundColor(runningTotal > 0 ? .primary : .secondary)
-                            }
-                            Spacer()
-                            if !entries.isEmpty { Button(action: undoLast) { Label("Undo", systemImage: "arrow.uturn.backward").font(.caption).foregroundColor(.orange) } }
+                    Picker("Type", selection: $type) {
+                        ForEach(TransactionType.allCases, id: \.self) {
+                            Text($0.rawValue).tag($0)
                         }
-                        if !entries.isEmpty {
-                            VStack(alignment: .leading, spacing: 4) {
-                                ForEach(entries.indices, id: \.self) { i in HStack { Image(systemName: "plus.circle.fill").foregroundColor(.green).font(.caption); Text(String(format: "$%.2f", entries[i])).font(.caption).foregroundColor(.secondary); Spacer() } }
-                            }.padding(8).background(Color(.systemGray6)).cornerRadius(8)
-                        }
-                        HStack(spacing: 8) {
-                            Text("$").foregroundColor(.secondary).font(.title3)
-                            TextField("Enter amount", text: $amount).keyboardType(.decimalPad).font(.title3)
-                            Button(action: addEntry) { Image(systemName: "plus.circle.fill").font(.title2).foregroundColor(.green) }.disabled(amount.isEmpty || Double(amount) == nil)
-                        }.padding(.vertical, 4)
-                        Text("Tap + to combine multiple items").font(.caption2).foregroundColor(.secondary)
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: type) { _ in
+                        category = filteredCategories.first ?? .other
                     }
                 }
+
+                Section("Category") {
+                    Picker("Category", selection: $category) {
+                        ForEach(filteredCategories, id: \.self) {
+                            Text($0.emoji + " " + $0.rawValue).tag($0)
+                        }
+                    }
+                    .pickerStyle(.wheel).frame(height: 120)
+                }
+
+                Section("Title (optional)") {
+                    TextField("Defaults to category name", text: $title)
+                }
+
+                // Running total + entry list
+                Section {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Total").font(.caption).foregroundColor(.secondary)
+                            Text(String(format: "$%.2f", runningTotal))
+                                .font(.system(size: 40, weight: .bold))
+                                .foregroundColor(runningTotal > 0 ? .primary : .secondary)
+                        }
+                        Spacer()
+                        if !entries.isEmpty {
+                            Button(action: undoLast) {
+                                VStack(spacing: 2) {
+                                    Image(systemName: "arrow.uturn.backward.circle.fill")
+                                        .font(.title2).foregroundColor(.orange)
+                                    Text("Undo last").font(.caption2).foregroundColor(.orange)
+                                }
+                            }
+                        }
+                    }
+                    .padding(.vertical, 4)
+
+                    if !entries.isEmpty {
+                        ForEach(entries.indices, id: \.self) { i in
+                            HStack {
+                                Image(systemName: "plus.circle.fill")
+                                    .foregroundColor(.green).font(.subheadline)
+                                Text(String(format: "$%.2f", entries[i]))
+                                    .font(.subheadline)
+                                Spacer()
+                                if i == entries.count - 1 {
+                                    Text("latest")
+                                        .font(.caption2).foregroundColor(.secondary)
+                                }
+                            }
+                        }
+                    }
+                } header: { Text("Amount") }
+
+                // Input + Add button
+                Section {
+                    // Amount text field with clear button
+                    HStack(spacing: 12) {
+                        Text("$")
+                            .font(.system(size: 28, weight: .semibold))
+                            .foregroundColor(.secondary)
+                        TextField("0.00", text: $amountText)
+                            .keyboardType(.decimalPad)
+                            .font(.system(size: 28, weight: .semibold))
+                        if !amountText.isEmpty {
+                            Button(action: { amountText = "" }) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.title2).foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                    .padding(.vertical, 4)
+
+                    HStack(spacing: 10) {
+                        Button(action: addEntry) {
+                            HStack {
+                                Spacer()
+                                Image(systemName: "plus.circle.fill")
+                                Text(String(format: "Add $%.2f", currentAmount))
+                                    .fontWeight(.semibold)
+                                Spacer()
+                            }
+                            .foregroundColor(.white)
+                            .padding(.vertical, 14)
+                            .background(canAdd ? Color.green : Color.gray)
+                            .cornerRadius(12)
+                        }
+                        .disabled(!canAdd)
+
+                        Button(action: subtractEntry) {
+                            HStack {
+                                Spacer()
+                                Image(systemName: "minus.circle.fill")
+                                Text(String(format: "Subtract $%.2f", currentAmount))
+                                    .fontWeight(.semibold)
+                                Spacer()
+                            }
+                            .foregroundColor(.white)
+                            .padding(.vertical, 14)
+                            .background(canAdd ? Color.red : Color.gray)
+                            .cornerRadius(12)
+                        }
+                        .disabled(!canAdd)
+                    }
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+
+                    if entries.isEmpty {
+                        Text("Type a number and tap Add. Tap Add again for more items.")
+                            .font(.caption2).foregroundColor(.secondary)
+                    } else {
+                        Text("\(entries.count) item\(entries.count == 1 ? "" : "s") — tap Undo to remove the last one")
+                            .font(.caption2).foregroundColor(.secondary)
+                    }
+                } header: { Text("Enter amount") }
+
                 Section("Date & Note") {
-                    DatePicker("Date", selection: $date, displayedComponents: [.date, .hourAndMinute])
+                    DatePicker("Date", selection: $date,
+                               displayedComponents: [.date, .hourAndMinute])
                     TextField("Note (optional)", text: $note)
                 }
             }
-            .navigationTitle("Add Transaction").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("Add Transaction")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .navigationBarTrailing) { Button("Save") { saveTransaction() }.fontWeight(.bold).disabled(runningTotal <= 0) }
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Save") { saveTransaction() }
+                        .fontWeight(.bold)
+                        .disabled(runningTotal <= 0)
+                }
             }
         }
     }
-    func addEntry() { guard let val = Double(amount), val > 0 else { return }; entries.append(val); runningTotal += val; amount = "" }
-    func undoLast() { guard let last = entries.last else { return }; runningTotal -= last; entries.removeLast() }
+
+    func addEntry() {
+        let text = amountText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let val = Double(text), val > 0 else { return }
+        entries.append(val)
+        runningTotal += val
+        amountText = ""
+    }
+    
+    func subtractEntry() {
+        let text = amountText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let val = Double(text), val > 0 else { return }
+
+        entries.append(-val)
+        runningTotal -= val
+        amountText = ""
+    }
+
+    func undoLast() {
+        guard let last = entries.last else { return }
+        runningTotal -= last
+        entries.removeLast()
+    }
+
     func saveTransaction() {
-        guard runningTotal > 0 else { return }
-        store.transactions.append(Transaction(title: title.isEmpty ? category.rawValue : title, amount: runningTotal, type: type, category: category, date: date, note: note, emoji: category.emoji))
+        var finalTotal = runningTotal
+        if let extra = Double(amountText.trimmingCharacters(in: .whitespacesAndNewlines)), extra > 0 {
+            finalTotal += extra
+        }
+        guard finalTotal > 0 else { return }
+        store.transactions.append(Transaction(
+            title: title.isEmpty ? category.rawValue : title,
+            amount: finalTotal,
+            type: type,
+            category: category,
+            date: date,
+            note: note,
+            emoji: category.emoji
+        ))
         dismiss()
     }
 }
