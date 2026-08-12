@@ -1,18 +1,19 @@
 import SwiftUI
 import Combine
 import EventKit
+import UserNotifications
 
 // MARK: - Event Store (Apple Calendar + custom events)
 
 class EventStore: ObservableObject {
-    @Published var events: [CalendarEvent] = [] { didSet { saveEvents() } }
+    @Published var events: [CalendarEvent] = [] { didSet { saveEvents(); scheduleAllCountdownNotifications() } }
     @Published var appleEvents: [EKEvent] = []
     @Published var isCalendarAuthorized = false
     @Published var calendarError: String? = nil
 
     private let ekStore = EKEventStore()
 
-    init() { loadEvents(); requestCalendarPermission() }
+    init() { loadEvents(); requestCalendarPermission(); requestNotificationPermission() }
 
     // MARK: Custom events persistence
     func saveEvents() {
@@ -78,6 +79,114 @@ class EventStore: ObservableObject {
 
     func hasAnyEventOnDate(_ date: Date) -> Bool {
         !eventsForDate(date).isEmpty || !appleEventsForDate(date).isEmpty
+    }
+
+    // MARK: - Push Notifications for Countdown Events
+
+    func requestNotificationPermission() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+    }
+
+    func scheduleAllCountdownNotifications() {
+        // Remove all existing countdown notifications first
+        let ids = events.filter { $0.isCountdown }.map { "countdown-\($0.id.uuidString)" }
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ids)
+        // Schedule for each countdown event
+        for event in events where event.isCountdown {
+            scheduleNotification(for: event)
+        }
+    }
+
+    func scheduleNotification(for event: CalendarEvent) {
+        let center = UNUserNotificationCenter.current()
+        let baseID = "countdown-\(event.id.uuidString)"
+        center.removePendingNotificationRequests(withIdentifiers: [baseID, baseID + "-week", baseID + "-day"])
+
+        let cal = Calendar.current
+
+        // Helper to create and schedule a notification
+        func schedule(id: String, title: String, body: String, date: Date) {
+            guard date > Date() else { return }
+            let content = UNMutableNotificationContent()
+            content.title = title
+            content.body = body
+            content.sound = .default
+            let comps = cal.dateComponents([.year, .month, .day, .hour, .minute], from: date)
+            let trigger = UNCalendarNotificationTrigger(dateMatching: comps, repeats: false)
+            center.add(UNNotificationRequest(identifier: id, content: content, trigger: trigger))
+        }
+
+        if event.isAnniversary {
+            // Schedule notification on the anniversary day itself (9 AM)
+            // For yearly events, find next occurrence
+            var nextComps = cal.dateComponents([.month, .day], from: event.date)
+            nextComps.year = cal.component(.year, from: Date())
+            nextComps.hour = 9; nextComps.minute = 0
+            var nextDate = cal.date(from: nextComps) ?? event.date
+            if nextDate < Date() {
+                nextComps.year! += 1
+                nextDate = cal.date(from: nextComps) ?? event.date
+            }
+            let years = cal.dateComponents([.year], from: event.date, to: nextDate).year ?? 0
+            let yearsText = years > 0 ? " \(years) year\(years == 1 ? "" : "s")!" : "!"
+            schedule(id: baseID,
+                     title: "🎉 \(event.emoji) \(event.title)\(yearsText)",
+                     body: years > 0
+                        ? "Today marks \(years) year\(years == 1 ? "" : "s"). Time to celebrate! 🥂"
+                        : "Today is the day! Don't forget to celebrate 🎊",
+                     date: nextDate)
+
+            // Also notify 1 week before
+            if let weekBefore = cal.date(byAdding: .day, value: -7, to: nextDate) {
+                schedule(id: baseID + "-week",
+                         title: "⏳ \(event.emoji) \(event.title) in 7 days",
+                         body: years > 0
+                            ? "One week until \(years) year\(years == 1 ? "" : "s") together!"
+                            : "One week until \(event.title)!",
+                         date: weekBefore)
+            }
+
+            // And 1 day before
+            if let dayBefore = cal.date(byAdding: .day, value: -1, to: nextDate) {
+                schedule(id: baseID + "-day",
+                         title: "🌟 \(event.emoji) Tomorrow is \(event.title)!",
+                         body: years > 0
+                            ? "Tomorrow marks \(years) year\(years == 1 ? "" : "s"). Plan something special! 💕"
+                            : "Tomorrow is \(event.title)! Get ready to celebrate 🎊",
+                         date: dayBefore)
+            }
+
+        } else {
+            // One-time countdown event
+            let targetDate = event.date
+            guard targetDate > Date() else { return }
+
+            // On the day itself at 9 AM
+            var dayComps = cal.dateComponents([.year, .month, .day], from: targetDate)
+            dayComps.hour = 9; dayComps.minute = 0
+            if let dayDate = cal.date(from: dayComps) {
+                schedule(id: baseID,
+                         title: "🎉 \(event.emoji) Today is the day!",
+                         body: "\(event.title) is today! \(event.notes.isEmpty ? "" : event.notes)",
+                         date: dayDate)
+            }
+
+            // 1 week before
+            if let weekBefore = cal.date(byAdding: .day, value: -7, to: targetDate) {
+                schedule(id: baseID + "-week",
+                         title: "⏳ \(event.emoji) \(event.title) in 1 week",
+                         body: "Only 7 days to go! Start preparing 🗓️",
+                         date: weekBefore)
+            }
+
+            // 1 day before
+            if let dayBefore = cal.date(byAdding: .day, value: -1, to: targetDate) {
+                schedule(id: baseID + "-day",
+                         title: "🌟 \(event.emoji) Tomorrow: \(event.title)",
+                         body: "Tomorrow is the big day! Get ready 🎊",
+                         date: dayBefore)
+            }
+        }
     }
 }
 
@@ -375,6 +484,7 @@ struct CalendarView: View {
                         }
                     }
                     .padding(.horizontal)
+
                     // Health summary for selected day
                     if let log = store.logForDate(selectedDate) {
                         DaySummaryCard(log: log, date: selectedDate).padding(.horizontal)
@@ -499,16 +609,7 @@ struct CalendarView: View {
     func previousMonth() { currentMonth = Calendar.current.date(byAdding: .month, value: -1, to: currentMonth) ?? currentMonth }
     func nextMonth()     { currentMonth = Calendar.current.date(byAdding: .month, value:  1, to: currentMonth) ?? currentMonth }
     func isSameDay(_ a: Date, _ b: Date) -> Bool { Calendar.current.isDate(a, inSameDayAs: b) }
-    func anniversaryEventsForDate(_ date: Date) -> [CalendarEvent] {
-        let dc = Calendar.current.dateComponents([.month, .day], from: date)
-        return countdownEvents.filter { event in
-            guard event.isAnniversary else { return false }
-            let ec = Calendar.current.dateComponents([.month, .day], from: event.date)
-            return ec.month == dc.month && ec.day == dc.day
-        }
-    }
 
-    // Returns emoji for any anniversary event whose month/day matches this date (any year)
     func anniversaryEmojiForDate(_ date: Date) -> String? {
         let dc = Calendar.current.dateComponents([.month, .day], from: date)
         return countdownEvents.first { event in
@@ -516,6 +617,15 @@ struct CalendarView: View {
             let ec = Calendar.current.dateComponents([.month, .day], from: event.date)
             return ec.month == dc.month && ec.day == dc.day
         }?.emoji
+    }
+
+    func anniversaryEventsForDate(_ date: Date) -> [CalendarEvent] {
+        let dc = Calendar.current.dateComponents([.month, .day], from: date)
+        return countdownEvents.filter { event in
+            guard event.isAnniversary else { return false }
+            let ec = Calendar.current.dateComponents([.month, .day], from: event.date)
+            return ec.month == dc.month && ec.day == dc.day
+        }
     }
 
     struct CalendarDay: Identifiable { let id: String; let date: Date? }
@@ -531,60 +641,6 @@ struct CalendarView: View {
         }
         while days.count % 7 != 0 { days.append(CalendarDay(id: "trail-\(days.count)", date: nil)) }
         return days
-    }
-}
-
-// MARK: - Anniversary Day Card
-
-struct AnniversaryDayCard: View {
-    let event: CalendarEvent
-    let selectedDate: Date
-
-    var yearsOnDate: Int {
-        Calendar.current.dateComponents([.year],
-            from: Calendar.current.startOfDay(for: event.date),
-            to: Calendar.current.startOfDay(for: selectedDate)).year ?? 0
-    }
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Text(event.emoji)
-                .font(.system(size: 28))
-                .frame(width: 44, height: 44)
-                .background(Color.orange.opacity(0.12))
-                .cornerRadius(10)
-
-            VStack(alignment: .leading, spacing: 3) {
-                if yearsOnDate > 0 {
-                    Text("Today is \(event.title) — \(yearsOnDate) Year\(yearsOnDate == 1 ? "" : "s")! 🎉")
-                        .font(.subheadline).fontWeight(.bold).foregroundColor(.orange)
-                    Text("That's \(yearsOnDate * 365) days")
-                        .font(.caption2).foregroundColor(.secondary)
-                } else {
-                    Text("Today is \(event.title)! 🎉")
-                        .font(.subheadline).fontWeight(.bold).foregroundColor(.orange)
-                }
-                if !event.notes.isEmpty {
-                    Text(event.notes).font(.caption2).foregroundColor(.secondary)
-                }
-            }
-
-            Spacer()
-
-            if yearsOnDate > 0 {
-                VStack(spacing: 2) {
-                    Text("Year").font(.caption2).foregroundColor(.secondary)
-                    Text("\(yearsOnDate)").font(.title3).fontWeight(.bold).foregroundColor(.orange)
-                }
-            }
-        }
-        .padding(12)
-        .background(
-            LinearGradient(colors: [Color.orange.opacity(0.12), Color.pink.opacity(0.08)],
-                           startPoint: .leading, endPoint: .trailing)
-        )
-        .cornerRadius(14)
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.orange.opacity(0.3), lineWidth: 1))
     }
 }
 
@@ -606,7 +662,7 @@ struct DayCell: View {
     let date: Date; let isSelected: Bool; let isToday: Bool
     let calories: Int; let weight: Double?; let hasEvent: Bool; let isPeriod: Bool
     var hasCountdown: Bool = false
-    var anniversaryEmoji: String? = nil  // emoji shown for recurring anniversary days
+    var anniversaryEmoji: String? = nil
 
     var calorieColor: Color {
         if calories == 0 { return .clear }
@@ -625,7 +681,6 @@ struct DayCell: View {
             } else {
                 Text(" ").font(.system(size: 9))
             }
-            // Anniversary emoji shown on recurring date across all years
             if let emoji = anniversaryEmoji {
                 Text(emoji).font(.system(size: 12))
             } else {
@@ -642,7 +697,6 @@ struct DayCell: View {
             RoundedRectangle(cornerRadius: 10)
                 .fill(isPeriod && !isSelected ? Color.pink.opacity(0.15) : isSelected ? Color.green : calorieColor)
         )
-        // Highlight anniversary days with a subtle orange ring
         .overlay(
             RoundedRectangle(cornerRadius: 10)
                 .stroke(anniversaryEmoji != nil && !isSelected ? Color.orange.opacity(0.5) : Color.clear, lineWidth: 1.5)
@@ -1112,6 +1166,53 @@ struct DayDetailView: View {
         if let p = Double(protein)  { log.protein = p }
         if let f = Double(fat)      { log.fat = f }
         store.saveLog(log)
+    }
+}
+
+// MARK: - Anniversary Day Card
+
+struct AnniversaryDayCard: View {
+    let event: CalendarEvent
+    let selectedDate: Date
+
+    var yearsOnDate: Int {
+        Calendar.current.dateComponents([.year],
+            from: Calendar.current.startOfDay(for: event.date),
+            to: Calendar.current.startOfDay(for: selectedDate)).year ?? 0
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(event.emoji).font(.system(size: 28))
+                .frame(width: 44, height: 44)
+                .background(Color.orange.opacity(0.12)).cornerRadius(10)
+            VStack(alignment: .leading, spacing: 3) {
+                if yearsOnDate > 0 {
+                    Text("Today is \(event.title) — \(yearsOnDate) Year\(yearsOnDate == 1 ? "" : "s")! 🎉")
+                        .font(.subheadline).fontWeight(.bold).foregroundColor(.orange)
+                    Text("That's \(yearsOnDate * 365) days")
+                        .font(.caption2).foregroundColor(.secondary)
+                } else {
+                    Text("Today is \(event.title)! 🎉")
+                        .font(.subheadline).fontWeight(.bold).foregroundColor(.orange)
+                }
+                if !event.notes.isEmpty {
+                    Text(event.notes).font(.caption2).foregroundColor(.secondary)
+                }
+            }
+            Spacer()
+            if yearsOnDate > 0 {
+                VStack(spacing: 2) {
+                    Text("Year").font(.caption2).foregroundColor(.secondary)
+                    Text("\(yearsOnDate)").font(.title3).fontWeight(.bold).foregroundColor(.orange)
+                }
+            }
+        }
+        .padding(12)
+        .background(LinearGradient(colors: [Color.orange.opacity(0.12), Color.pink.opacity(0.08)],
+                                   startPoint: .leading, endPoint: .trailing))
+        .cornerRadius(14)
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.orange.opacity(0.3), lineWidth: 1))
     }
 }
 

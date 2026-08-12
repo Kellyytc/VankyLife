@@ -125,11 +125,16 @@ struct CustomTabItem: View {
     var isSelected: Bool { selected == tag }
     var body: some View {
         Button(action: { selected = tag }) {
-            VStack(spacing: 3) {
-                Image(systemName: icon).font(.system(size: 20)).foregroundColor(isSelected ? .green : .secondary)
-                Text(label).font(.system(size: 9)).foregroundColor(isSelected ? .green : .secondary)
+            VStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 24, weight: .regular))
+                    .foregroundColor(isSelected ? .green : Color(.systemGray))
+                Text(label)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(isSelected ? .green : Color(.systemGray))
             }
-            .frame(maxWidth: .infinity).padding(.vertical, 4)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
         }
     }
 }
@@ -205,7 +210,7 @@ struct DashboardView: View {
             ZStack {
                 ScrollView {
                     VStack(spacing: 20) {
-                        
+
                         // Calorie ring
                         ZStack {
                             Circle().stroke(Color.green.opacity(0.15), lineWidth: 16).frame(width: 180, height: 180)
@@ -282,7 +287,7 @@ struct DashboardView: View {
                             }
                             .padding(.horizontal)
                         }
-                        
+
                         // Exercise bonus
                         if healthKit.isAuthorized && healthKit.activeCalories > 0 {
                             HStack(spacing: 8) {
@@ -296,14 +301,14 @@ struct DashboardView: View {
                             }
                             .padding(10).background(Color.orange.opacity(0.08)).cornerRadius(12).padding(.horizontal)
                         }
-                        
+
                         // Macro cards
                         HStack(spacing: 12) {
                             MacroCard(label: "Carbs",   value: "\(Int(totalCarbs))g",   color: .orange)
                             MacroCard(label: "Protein", value: "\(Int(totalProtein))g", color: .green)
                             MacroCard(label: "Fat",     value: "\(Int(totalFat))g",     color: .blue)
                         }.padding(.horizontal)
-                        
+
                         // Today's meals
                         let todayMeals = recentMeals.filter { Calendar.current.isDateInToday($0.date) }
                         if !todayMeals.isEmpty {
@@ -328,11 +333,11 @@ struct DashboardView: View {
                             }
                             .padding().background(.regularMaterial).cornerRadius(16).padding(.horizontal)
                         }
-                        
+
                         // To-Do section
                         TodoDashboardSection(store: todoStore, showAddTodo: $showAddTodo, editingTodo: $editingTodo, showCompleted: $showCompletedTodos)
                             .padding(.horizontal)
-                        
+
                         // Upcoming events
                         if !upcomingEvents.isEmpty {
                             VStack(alignment: .leading, spacing: 10) {
@@ -356,10 +361,10 @@ struct DashboardView: View {
                             }
                             .padding().background(.regularMaterial).cornerRadius(16).padding(.horizontal)
                         }
-                        
+
                         // Finance summary
                         MonthFinanceSummary(store: financeStore).padding(.horizontal)
-                        
+
                         // Weight trend
                         VStack(alignment: .leading, spacing: 12) {
                             HStack {
@@ -408,7 +413,7 @@ struct DashboardView: View {
                                         }
                                     }
                                 }.frame(height: 120).padding(.bottom, 20)
-                                
+
                                 VStack(alignment: .leading, spacing: 8) {
                                     Text("Recent Logs").font(.caption).foregroundColor(.secondary)
                                     ForEach(groupedRecentWeightLogs, id: \.date) { group in
@@ -427,7 +432,7 @@ struct DashboardView: View {
                                         }
                                     }
                                 }
-                                
+
                                 if recentWeightLogs.count >= 2 {
                                     let diff = recentWeightLogs.last!.weight - recentWeightLogs.first!.weight
                                     HStack(spacing: 6) {
@@ -435,13 +440,13 @@ struct DashboardView: View {
                                             .foregroundColor(diff < 0 ? .green : diff > 0 ? .red : .secondary)
                                         Text(diff < 0 ? String(format: "%.1f kg lower than 7 days ago 🎉", abs(diff))
                                              : diff > 0 ? String(format: "%.1f kg higher than 7 days ago", diff) : "Weight stable")
-                                        .font(.caption).foregroundColor(diff < 0 ? .green : diff > 0 ? .red : .secondary)
+                                            .font(.caption).foregroundColor(diff < 0 ? .green : diff > 0 ? .red : .secondary)
                                     }
                                 }
                             }
                         }
                         .padding().background(.regularMaterial).cornerRadius(16).padding(.horizontal)
-                        
+
                         // Apple Health
                         VStack(alignment: .leading, spacing: 14) {
                             HStack {
@@ -516,7 +521,7 @@ struct DashboardView: View {
                             }
                         }
                         .padding().background(.regularMaterial).cornerRadius(16).padding(.horizontal)
-                        
+
                         Button(action: resetDay) {
                             Label("Reset Today's Calories", systemImage: "arrow.counterclockwise").font(.footnote).foregroundColor(.red)
                         }.padding(.bottom, 24)
@@ -527,7 +532,7 @@ struct DashboardView: View {
                     healthKit.fetchAll(); recentMeals = ManualMeal.loadAll()
                     financeStore.refreshAll(); weightLogs = WeightLog.loadAll()
                 }
-                
+
                 if showingLogPanel {
                     Color.black.opacity(0.3).ignoresSafeArea()
                         .onTapGesture {
@@ -764,7 +769,7 @@ struct AddEditTodoView: View {
     @State private var emoji = "✅"
     var isEditing: Bool { existing != nil }
     let quickEmojis = ["✅","📌","🔥","💡","📞","🛒","💊","🏃","📝","🎯","🧹","💻","📧","🍳","🚗","💰","📚","🎵","🌿","⚡"]
-    
+
     var body: some View {
         NavigationView {
             Form {
@@ -800,8 +805,8 @@ struct AddEditTodoView: View {
                     Button(isEditing ? "Save" : "Add") {
                         guard !title.isEmpty else { return }
                         let item = TodoItem(id: existing?.id ?? UUID(), title: title, note: note,
-                                            isDone: existing?.isDone ?? false, priority: priority,
-                                            dueDate: hasDueDate ? dueDate : nil, hasDueDate: hasDueDate, emoji: emoji)
+                            isDone: existing?.isDone ?? false, priority: priority,
+                            dueDate: hasDueDate ? dueDate : nil, hasDueDate: hasDueDate, emoji: emoji)
                         if isEditing, let i = store.todos.firstIndex(where: { $0.id == item.id }) {
                             store.todos[i] = item
                         } else { store.todos.append(item) }
@@ -811,12 +816,17 @@ struct AddEditTodoView: View {
             }
             .onAppear {
                 guard let e = existing else { return }
-                title = e.title; note = e.note; priority = e.priority; emoji = e.emoji
-                hasDueDate = e.hasDueDate; if let d = e.dueDate { dueDate = d }
+                title = e.title
+                note = e.note
+                priority = e.priority
+                emoji = e.emoji
+                hasDueDate = e.hasDueDate
+                if let d = e.dueDate { dueDate = d }
             }
         }
     }
 }
+
 // MARK: - Month Finance Summary
 
 struct MonthFinanceSummary: View {
