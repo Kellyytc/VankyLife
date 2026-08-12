@@ -336,7 +336,16 @@ struct CalendarView: View {
                                     weight: store.weightForDate(date),
                                     hasEvent: eventStore.hasAnyEventOnDate(date),
                                     isPeriod: healthKit.isPeriodDate(date),
-                                    hasCountdown: countdownEvents.contains { isSameDay($0.date, date) }
+                                    hasCountdown: countdownEvents.contains { event in
+                                        if isSameDay(event.date, date) { return true }
+                                        if event.isAnniversary {
+                                            let ec = Calendar.current.dateComponents([.month, .day], from: event.date)
+                                            let dc = Calendar.current.dateComponents([.month, .day], from: date)
+                                            return ec.month == dc.month && ec.day == dc.day
+                                        }
+                                        return false
+                                    },
+                                    anniversaryEmoji: anniversaryEmojiForDate(date)
                                 )
                                 .onTapGesture { selectedDate = date }
                             } else {
@@ -355,12 +364,17 @@ struct CalendarView: View {
                         }.padding(.horizontal)
                     }
 
-                    // Selected date header
-                    HStack {
-                        Text(formattedSelectedDate).font(.headline)
-                        Spacer()
-                    }.padding(.horizontal)
-
+                    // Selected date header + anniversary announcement
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text(formattedSelectedDate).font(.headline)
+                            Spacer()
+                        }
+                        ForEach(anniversaryEventsForDate(selectedDate)) { event in
+                            AnniversaryDayCard(event: event, selectedDate: selectedDate)
+                        }
+                    }
+                    .padding(.horizontal)
                     // Health summary for selected day
                     if let log = store.logForDate(selectedDate) {
                         DaySummaryCard(log: log, date: selectedDate).padding(.horizontal)
@@ -485,6 +499,24 @@ struct CalendarView: View {
     func previousMonth() { currentMonth = Calendar.current.date(byAdding: .month, value: -1, to: currentMonth) ?? currentMonth }
     func nextMonth()     { currentMonth = Calendar.current.date(byAdding: .month, value:  1, to: currentMonth) ?? currentMonth }
     func isSameDay(_ a: Date, _ b: Date) -> Bool { Calendar.current.isDate(a, inSameDayAs: b) }
+    func anniversaryEventsForDate(_ date: Date) -> [CalendarEvent] {
+        let dc = Calendar.current.dateComponents([.month, .day], from: date)
+        return countdownEvents.filter { event in
+            guard event.isAnniversary else { return false }
+            let ec = Calendar.current.dateComponents([.month, .day], from: event.date)
+            return ec.month == dc.month && ec.day == dc.day
+        }
+    }
+
+    // Returns emoji for any anniversary event whose month/day matches this date (any year)
+    func anniversaryEmojiForDate(_ date: Date) -> String? {
+        let dc = Calendar.current.dateComponents([.month, .day], from: date)
+        return countdownEvents.first { event in
+            guard event.isAnniversary else { return false }
+            let ec = Calendar.current.dateComponents([.month, .day], from: event.date)
+            return ec.month == dc.month && ec.day == dc.day
+        }?.emoji
+    }
 
     struct CalendarDay: Identifiable { let id: String; let date: Date? }
 
@@ -499,6 +531,60 @@ struct CalendarView: View {
         }
         while days.count % 7 != 0 { days.append(CalendarDay(id: "trail-\(days.count)", date: nil)) }
         return days
+    }
+}
+
+// MARK: - Anniversary Day Card
+
+struct AnniversaryDayCard: View {
+    let event: CalendarEvent
+    let selectedDate: Date
+
+    var yearsOnDate: Int {
+        Calendar.current.dateComponents([.year],
+            from: Calendar.current.startOfDay(for: event.date),
+            to: Calendar.current.startOfDay(for: selectedDate)).year ?? 0
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(event.emoji)
+                .font(.system(size: 28))
+                .frame(width: 44, height: 44)
+                .background(Color.orange.opacity(0.12))
+                .cornerRadius(10)
+
+            VStack(alignment: .leading, spacing: 3) {
+                if yearsOnDate > 0 {
+                    Text("Today is \(event.title) — \(yearsOnDate) Year\(yearsOnDate == 1 ? "" : "s")! 🎉")
+                        .font(.subheadline).fontWeight(.bold).foregroundColor(.orange)
+                    Text("That's \(yearsOnDate * 365) days")
+                        .font(.caption2).foregroundColor(.secondary)
+                } else {
+                    Text("Today is \(event.title)! 🎉")
+                        .font(.subheadline).fontWeight(.bold).foregroundColor(.orange)
+                }
+                if !event.notes.isEmpty {
+                    Text(event.notes).font(.caption2).foregroundColor(.secondary)
+                }
+            }
+
+            Spacer()
+
+            if yearsOnDate > 0 {
+                VStack(spacing: 2) {
+                    Text("Year").font(.caption2).foregroundColor(.secondary)
+                    Text("\(yearsOnDate)").font(.title3).fontWeight(.bold).foregroundColor(.orange)
+                }
+            }
+        }
+        .padding(12)
+        .background(
+            LinearGradient(colors: [Color.orange.opacity(0.12), Color.pink.opacity(0.08)],
+                           startPoint: .leading, endPoint: .trailing)
+        )
+        .cornerRadius(14)
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.orange.opacity(0.3), lineWidth: 1))
     }
 }
 
@@ -520,6 +606,7 @@ struct DayCell: View {
     let date: Date; let isSelected: Bool; let isToday: Bool
     let calories: Int; let weight: Double?; let hasEvent: Bool; let isPeriod: Bool
     var hasCountdown: Bool = false
+    var anniversaryEmoji: String? = nil  // emoji shown for recurring anniversary days
 
     var calorieColor: Color {
         if calories == 0 { return .clear }
@@ -538,17 +625,27 @@ struct DayCell: View {
             } else {
                 Text(" ").font(.system(size: 9))
             }
-            HStack(spacing: 3) {
-                Circle().fill(weight != nil ? (isSelected ? Color.white : Color.blue) : Color.clear).frame(width: 4, height: 4)
-                Circle().fill(hasEvent    ? (isSelected ? Color.white : Color.purple) : Color.clear).frame(width: 4, height: 4)
-                Circle().fill(isPeriod    ? (isSelected ? Color.white : Color.pink)   : Color.clear).frame(width: 4, height: 4)
-                Circle().fill(hasCountdown ? (isSelected ? Color.white : Color.orange) : Color.clear).frame(width: 4, height: 4)
+            // Anniversary emoji shown on recurring date across all years
+            if let emoji = anniversaryEmoji {
+                Text(emoji).font(.system(size: 12))
+            } else {
+                HStack(spacing: 3) {
+                    Circle().fill(weight != nil ? (isSelected ? Color.white : Color.blue) : Color.clear).frame(width: 4, height: 4)
+                    Circle().fill(hasEvent    ? (isSelected ? Color.white : Color.purple) : Color.clear).frame(width: 4, height: 4)
+                    Circle().fill(isPeriod    ? (isSelected ? Color.white : Color.pink)   : Color.clear).frame(width: 4, height: 4)
+                    Circle().fill(hasCountdown ? (isSelected ? Color.white : Color.orange) : Color.clear).frame(width: 4, height: 4)
+                }
             }
         }
         .frame(height: 56).frame(maxWidth: .infinity)
         .background(
             RoundedRectangle(cornerRadius: 10)
                 .fill(isPeriod && !isSelected ? Color.pink.opacity(0.15) : isSelected ? Color.green : calorieColor)
+        )
+        // Highlight anniversary days with a subtle orange ring
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(anniversaryEmoji != nil && !isSelected ? Color.orange.opacity(0.5) : Color.clear, lineWidth: 1.5)
         )
     }
 }
