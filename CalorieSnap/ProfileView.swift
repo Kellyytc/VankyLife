@@ -1,464 +1,435 @@
 import SwiftUI
 import Combine
 
-// MARK: - User Profile
-
 class UserProfile: ObservableObject {
-    @AppStorage("profile_height") var height: Double = 160
-    @AppStorage("profile_weight") var weight: Double = 71
-    @AppStorage("profile_age") var age: Int = 25
-    @AppStorage("profile_gender") var genderRaw: String = "female"
-    @AppStorage("profile_activity") var activityRaw: String = "light"
-    @AppStorage("profile_goal") var goalRaw: String = "lose05"
-    @AppStorage("profile_setup_done") var setupDone: Bool = false
+    @AppStorage("dailyCalorieGoal") var dailyCalorieGoal: Int = 1683
+    @AppStorage("weeklyWeightGoal") var weeklyWeightGoal: Double = 0.5
+    @AppStorage("userWeight") var userWeight: Double = 71
+    @AppStorage("userHeight") var userHeight: Double = 160
+    @AppStorage("userAge") var userAge: Int = 25
+    @AppStorage("userName") var userName: String = "Kelly"
+}
 
-    var gender: Gender {
-        get { Gender(rawValue: genderRaw) ?? .female }
-        set { genderRaw = newValue.rawValue }
-    }
+// MARK: - Year Wish Models
 
-    var activityLevel: ActivityLevel {
-        get { ActivityLevel(rawValue: activityRaw) ?? .light }
-        set { activityRaw = newValue.rawValue }
-    }
-
-    var goal: WeightGoal {
-        get { WeightGoal(rawValue: goalRaw) ?? .lose05 }
-        set { goalRaw = newValue.rawValue }
-    }
-
-    // Mifflin-St Jeor BMR formula
-    var bmr: Double {
-        if gender == .male {
-            return 10 * weight + 6.25 * height - 5 * Double(age) + 5
-        } else {
-            return 10 * weight + 6.25 * height - 5 * Double(age) - 161
+enum WishCategory: String, Codable, CaseIterable {
+    case personal = "Personal"; case travel = "Travel"; case career = "Career"
+    case health = "Health"; case relationship = "Relationship"; case finance = "Finance"
+    case learn = "Learn"; case other = "Other"
+    var emoji: String {
+        switch self {
+        case .personal: return "🌸"; case .travel: return "✈️"; case .career: return "💼"
+        case .health: return "💪"; case .relationship: return "💕"; case .finance: return "💰"
+        case .learn: return "📚"; case .other: return "⭐"
         }
     }
-
-    var tdee: Double {
-        bmr * activityLevel.multiplier
-    }
-
-    var dailyCalorieGoal: Int {
-        Int(tdee + goal.adjustment)
-    }
-
-    var bmi: Double {
-        let heightM = height / 100
-        return weight / (heightM * heightM)
-    }
-
-    var bmiCategory: String {
-        switch bmi {
-        case ..<18.5: return "Underweight"
-        case 18.5..<25: return "Normal"
-        case 25..<30: return "Overweight"
-        default: return "Obese"
-        }
-    }
-
-    var bmiColor: Color {
-        switch bmi {
-        case ..<18.5: return .blue
-        case 18.5..<25: return .green
-        case 25..<30: return .orange
-        default: return .red
+    var color: Color {
+        switch self {
+        case .personal: return .pink; case .travel: return .blue; case .career: return .purple
+        case .health: return .green; case .relationship: return .red; case .finance: return .orange
+        case .learn: return .teal; case .other: return .secondary
         }
     }
 }
 
-// MARK: - Enums
+struct WishItem: Identifiable, Codable {
+    var id = UUID()
+    var title: String
+    var note: String
+    var emoji: String
+    var isDone: Bool
+    var category: WishCategory
+    var createdAt: Date
+    var completedAt: Date?
+    var targetYear: Int
 
-enum Gender: String, CaseIterable {
-    case male = "male"
-    case female = "female"
-
-    var label: String {
-        switch self {
-        case .male: return "Male 男"
-        case .female: return "Female 女"
-        }
+    init(id: UUID = UUID(), title: String, note: String = "", emoji: String = "⭐",
+         isDone: Bool = false, category: WishCategory = .personal,
+         targetYear: Int = Calendar.current.component(.year, from: Date())) {
+        self.id = id; self.title = title; self.note = note; self.emoji = emoji
+        self.isDone = isDone; self.category = category
+        self.createdAt = Date(); self.targetYear = targetYear
     }
 }
 
-enum ActivityLevel: String, CaseIterable {
-    case sedentary = "sedentary"
-    case light = "light"
-    case moderate = "moderate"
-    case active = "active"
-    case veryActive = "veryActive"
-
-    var label: String {
-        switch self {
-        case .sedentary: return "Sedentary (desk job, little exercise)"
-        case .light: return "Light (exercise 1–3x/week)"
-        case .moderate: return "Moderate (exercise 3–5x/week)"
-        case .active: return "Active (exercise 6–7x/week)"
-        case .veryActive: return "Very Active (physical job + exercise)"
+class WishStore: ObservableObject {
+    @Published var wishes: [WishItem] = [] { didSet { save() } }
+    init() { load() }
+    func save() {
+        if let d = try? JSONEncoder().encode(wishes) { UserDefaults.standard.set(d, forKey: "wishItems_v2") }
+    }
+    func load() {
+        guard let d = UserDefaults.standard.data(forKey: "wishItems_v2"),
+              let decoded = try? JSONDecoder().decode([WishItem].self, from: d) else { return }
+        wishes = decoded
+    }
+    func toggle(_ item: WishItem) {
+        if let i = wishes.firstIndex(where: { $0.id == item.id }) {
+            wishes[i].isDone.toggle()
+            wishes[i].completedAt = wishes[i].isDone ? Date() : nil
         }
     }
-
-    var multiplier: Double {
-        switch self {
-        case .sedentary: return 1.2
-        case .light: return 1.375
-        case .moderate: return 1.55
-        case .active: return 1.725
-        case .veryActive: return 1.9
-        }
-    }
-}
-
-enum WeightGoal: String, CaseIterable {
-    case lose15 = "lose15"
-    case lose1 = "lose1"
-    case lose05 = "lose05"
-    case maintain = "maintain"
-    case gain05 = "gain05"
-    case gain1 = "gain1"
-
-    var label: String {
-        switch self {
-        case .lose15: return "Lose 1.5 kg/week"
-        case .lose1: return "Lose 1 kg/week"
-        case .lose05: return "Lose 0.5 kg/week"
-        case .maintain: return "Maintain weight"
-        case .gain05: return "Gain 0.5 kg/week"
-        case .gain1: return "Gain 1 kg/week"
-        }
-    }
-
-    var adjustment: Double {
-        switch self {
-        case .lose15: return -825
-        case .lose1: return -550
-        case .lose05: return -275
-        case .maintain: return 0
-        case .gain05: return 275
-        case .gain1: return 550
-        }
-    }
+    var currentYear: Int { Calendar.current.component(.year, from: Date()) }
+    var thisYearWishes: [WishItem] { wishes.filter { $0.targetYear == currentYear } }
 }
 
 // MARK: - Profile View
 
 struct ProfileView: View {
-    @StateObject private var profile = UserProfile()
-    @State private var isEditing = false
+    @StateObject private var wishStore = WishStore()
+    @AppStorage("userName") var userName: String = "Kelly"
+    @AppStorage("userAge") var userAge: Int = 25
+    @AppStorage("userHeight") var userHeight: Double = 160
+    @AppStorage("userWeight") var userWeight: Double = 71
+    @AppStorage("dailyCalorieGoal") var dailyCalorieGoal: Int = 1683
+    @AppStorage("weeklyWeightGoal") var weeklyWeightGoal: Double = 0.5
+
+    @State private var showAddWish = false
+    @State private var editingWish: WishItem? = nil
+    @State private var showCompletedWishes = false
+    @State private var selectedCategory: WishCategory? = nil
+    @State private var isEditingProfile = false
+
+    var pendingWishes: [WishItem] {
+        var base = wishStore.thisYearWishes.filter { !$0.isDone }
+        if let cat = selectedCategory { base = base.filter { $0.category == cat } }
+        return base
+    }
+    var doneWishes: [WishItem] {
+        var base = wishStore.thisYearWishes.filter { $0.isDone }
+        if let cat = selectedCategory { base = base.filter { $0.category == cat } }
+        return base
+    }
+    var progress: Double {
+        guard !wishStore.thisYearWishes.isEmpty else { return 0 }
+        return Double(wishStore.thisYearWishes.filter { $0.isDone }.count) / Double(wishStore.thisYearWishes.count)
+    }
 
     var body: some View {
         NavigationView {
             ScrollView {
                 VStack(spacing: 20) {
 
-                    // BMI + Calorie summary card
-                    VStack(spacing: 16) {
-                        HStack(spacing: 24) {
-                            VStack(spacing: 6) {
-                                Text(String(format: "%.1f", profile.bmi))
-                                    .font(.system(size: 36, weight: .bold))
-                                    .foregroundColor(profile.bmiColor)
-                                Text("BMI")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Text(profile.bmiCategory)
-                                    .font(.caption2)
-                                    .foregroundColor(profile.bmiColor)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 2)
-                                    .background(profile.bmiColor.opacity(0.15))
-                                    .cornerRadius(6)
+                    // Profile card
+                    VStack(spacing: 14) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(userName).font(.title2).fontWeight(.bold)
+                                HStack(spacing: 12) {
+                                    Label("\(userAge) yrs", systemImage: "person.fill").font(.caption).foregroundColor(.secondary)
+                                    Label(String(format: "%.0f cm", userHeight), systemImage: "ruler").font(.caption).foregroundColor(.secondary)
+                                    Label(String(format: "%.1f kg", userWeight), systemImage: "scalemass").font(.caption).foregroundColor(.secondary)
+                                }
                             }
-
-                            Divider().frame(height: 60)
-
-                            VStack(spacing: 6) {
-                                Text("\(profile.dailyCalorieGoal)")
-                                    .font(.system(size: 36, weight: .bold))
-                                    .foregroundColor(.green)
-                                Text("Daily Goal")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Text("kcal / day")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
+                            Spacer()
+                            Button(action: { isEditingProfile = true }) {
+                                Image(systemName: "pencil.circle.fill").font(.title2).foregroundColor(.green)
                             }
                         }
-
                         Divider()
-
                         HStack(spacing: 0) {
-                            StatPill(label: "BMR", value: "\(Int(profile.bmr))", unit: "kcal", color: .orange)
-                            StatPill(label: "TDEE", value: "\(Int(profile.tdee))", unit: "kcal", color: .blue)
-                            StatPill(label: "Goal", value: profile.goal.label, unit: "", color: .green)
+                            VStack(spacing: 4) {
+                                Text("\(dailyCalorieGoal)").font(.title3).fontWeight(.bold).foregroundColor(.green)
+                                Text("kcal/day goal").font(.caption2).foregroundColor(.secondary)
+                            }.frame(maxWidth: .infinity)
+                            Divider().frame(height: 36)
+                            VStack(spacing: 4) {
+                                Text(String(format: "%.1f kg/wk", weeklyWeightGoal)).font(.title3).fontWeight(.bold).foregroundColor(.blue)
+                                Text("weight goal").font(.caption2).foregroundColor(.secondary)
+                            }.frame(maxWidth: .infinity)
                         }
                     }
-                    .padding()
-                    .background(.regularMaterial)
-                    .cornerRadius(16)
-                    .padding(.horizontal)
+                    .padding().background(.regularMaterial).cornerRadius(16).padding(.horizontal)
 
-                    // Body stats
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Body Stats")
-                            .font(.headline)
-                            .padding(.horizontal)
-
-                        VStack(spacing: 0) {
-                            ProfileRow(icon: "ruler", label: "Height", value: "\(Int(profile.height)) cm")
-                            Divider().padding(.leading, 44)
-                            ProfileRow(icon: "scalemass", label: "Weight", value: "\(String(format: "%.1f", profile.weight)) kg")
-                            Divider().padding(.leading, 44)
-                            ProfileRow(icon: "calendar", label: "Age", value: "\(profile.age) years")
-                            Divider().padding(.leading, 44)
-                            ProfileRow(icon: "person", label: "Gender", value: profile.gender.label)
+                    // Year Wish List
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack {
+                            Image(systemName: "star.fill").foregroundColor(.yellow)
+                            Text("\(String(wishStore.currentYear)) Wish List").font(.headline)
+                            Spacer()
+                            Button(action: { showAddWish = true }) {
+                                Image(systemName: "plus.circle.fill").foregroundColor(.pink).font(.title3)
+                            }
                         }
-                        .background(.regularMaterial)
-                        .cornerRadius(16)
-                        .padding(.horizontal)
-                    }
 
-                    // Activity & Goal
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Activity & Goal")
-                            .font(.headline)
-                            .padding(.horizontal)
-
-                        VStack(spacing: 0) {
-                            ProfileRow(icon: "figure.walk", label: "Activity", value: profile.activityLevel.label)
-                            Divider().padding(.leading, 44)
-                            ProfileRow(icon: "target", label: "Goal", value: profile.goal.label)
+                        // Progress ring
+                        if !wishStore.thisYearWishes.isEmpty {
+                            HStack(spacing: 16) {
+                                ZStack {
+                                    Circle().stroke(Color.pink.opacity(0.2), lineWidth: 10).frame(width: 56, height: 56)
+                                    Circle().trim(from: 0, to: CGFloat(progress))
+                                        .stroke(Color.pink, style: StrokeStyle(lineWidth: 10, lineCap: .round))
+                                        .frame(width: 56, height: 56).rotationEffect(.degrees(-90))
+                                    Text("\(Int(progress * 100))%").font(.caption2).fontWeight(.bold).foregroundColor(.pink)
+                                }
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("\(doneWishes.count) of \(wishStore.thisYearWishes.count) achieved ✨")
+                                        .font(.subheadline).fontWeight(.semibold)
+                                    ProgressView(value: progress).tint(.pink)
+                                }
+                            }
                         }
-                        .background(.regularMaterial)
-                        .cornerRadius(16)
-                        .padding(.horizontal)
-                    }
 
-                    // Calculation breakdown
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("How your goal is calculated")
-                            .font(.headline)
+                        // Category filter
+                        if !wishStore.thisYearWishes.isEmpty {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 8) {
+                                    WishFilterPill(label: "All", isSelected: selectedCategory == nil, color: .secondary) {
+                                        selectedCategory = nil
+                                    }
+                                    ForEach(WishCategory.allCases, id: \.self) { cat in
+                                        let count = wishStore.thisYearWishes.filter { $0.category == cat }.count
+                                        if count > 0 {
+                                            WishFilterPill(label: "\(cat.emoji) \(cat.rawValue)", isSelected: selectedCategory == cat, color: cat.color) {
+                                                selectedCategory = selectedCategory == cat ? nil : cat
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
 
-                        VStack(alignment: .leading, spacing: 6) {
-                            CalcRow(label: "BMR (base metabolism)", value: "\(Int(profile.bmr)) kcal")
-                            CalcRow(label: "× Activity multiplier (\(profile.activityLevel.multiplier))", value: "\(Int(profile.tdee)) kcal")
-                            CalcRow(label: "± Goal adjustment", value: "\(Int(profile.goal.adjustment)) kcal")
-                            Divider()
-                            HStack {
-                                Text("Daily calorie goal")
-                                    .font(.subheadline)
-                                    .fontWeight(.semibold)
-                                Spacer()
-                                Text("\(profile.dailyCalorieGoal) kcal")
-                                    .font(.subheadline)
-                                    .fontWeight(.bold)
-                                    .foregroundColor(.green)
+                        // Pending wishes
+                        if pendingWishes.isEmpty && wishStore.thisYearWishes.isEmpty {
+                            VStack(spacing: 10) {
+                                Text("⭐").font(.system(size: 40))
+                                Text("No wishes yet for \(String(wishStore.currentYear))")
+                                    .font(.subheadline).foregroundColor(.secondary)
+                                Text("What do you want to achieve this year?")
+                                    .font(.caption).foregroundColor(.secondary).multilineTextAlignment(.center)
+                                Button(action: { showAddWish = true }) {
+                                    Label("Add a Wish", systemImage: "plus.circle.fill").foregroundColor(.pink)
+                                }
+                            }
+                            .frame(maxWidth: .infinity).padding(.vertical, 20)
+                        } else {
+                            if !pendingWishes.isEmpty {
+                                VStack(spacing: 8) {
+                                    ForEach(pendingWishes) { wish in
+                                        WishRow(wish: wish, store: wishStore)
+                                            .onTapGesture { editingWish = wish }
+                                            .swipeActions(edge: .leading) {
+                                                Button { wishStore.toggle(wish) } label: {
+                                                    Label("Done!", systemImage: "star.fill")
+                                                }.tint(.pink)
+                                            }
+                                            .swipeActions(edge: .trailing) {
+                                                Button(role: .destructive) {
+                                                    wishStore.wishes.removeAll { $0.id == wish.id }
+                                                } label: { Label("Delete", systemImage: "trash") }
+                                                Button { editingWish = wish } label: {
+                                                    Label("Edit", systemImage: "pencil")
+                                                }.tint(.blue)
+                                            }
+                                    }
+                                }
+                            }
+
+                            // Achieved
+                            if !doneWishes.isEmpty {
+                                Button(action: { withAnimation { showCompletedWishes.toggle() } }) {
+                                    HStack {
+                                        Text("Achieved 🌟 (\(doneWishes.count))").font(.subheadline).foregroundColor(.secondary)
+                                        Spacer()
+                                        Image(systemName: showCompletedWishes ? "chevron.up" : "chevron.down")
+                                            .font(.caption).foregroundColor(.secondary)
+                                    }
+                                }
+                                if showCompletedWishes {
+                                    VStack(spacing: 8) {
+                                        ForEach(doneWishes) { wish in
+                                            WishRow(wish: wish, store: wishStore)
+                                                .swipeActions(edge: .leading) {
+                                                    Button { wishStore.toggle(wish) } label: {
+                                                        Label("Undo", systemImage: "arrow.uturn.backward")
+                                                    }.tint(.orange)
+                                                }
+                                                .swipeActions(edge: .trailing) {
+                                                    Button(role: .destructive) {
+                                                        wishStore.wishes.removeAll { $0.id == wish.id }
+                                                    } label: { Label("Delete", systemImage: "trash") }
+                                                }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
-                    .padding()
-                    .background(.regularMaterial)
-                    .cornerRadius(16)
-                    .padding(.horizontal)
-                    .padding(.bottom, 24)
-                }
-                .padding(.top, 16)
-            }
-            .navigationTitle("My Profile")
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: { isEditing = true }) {
-                        Label("Edit", systemImage: "pencil")
+                    .padding().background(.regularMaterial).cornerRadius(16).padding(.horizontal)
+
+                    // App info
+                    VStack(spacing: 8) {
+                        Text("Kelly Life").font(.caption).foregroundColor(.secondary)
+                        Text("Built with ❤️ for healthy living").font(.caption2).foregroundColor(.secondary)
                     }
+                    .frame(maxWidth: .infinity).padding(.bottom, 24)
                 }
+                .padding(.vertical, 12)
             }
-            .sheet(isPresented: $isEditing) {
-                EditProfileView(profile: profile)
-            }
+            .navigationTitle("Profile")
+            .sheet(isPresented: $showAddWish) { AddEditWishView(store: wishStore) }
+            .sheet(item: $editingWish) { wish in AddEditWishView(store: wishStore, existing: wish) }
+            .sheet(isPresented: $isEditingProfile) { EditProfileView() }
         }
     }
 }
 
-// MARK: - Profile Row
+// MARK: - Wish Filter Pill
 
-struct ProfileRow: View {
-    let icon: String
-    let label: String
-    let value: String
+struct WishFilterPill: View {
+    let label: String; let isSelected: Bool; let color: Color; let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            Text(label).font(.caption).fontWeight(.medium)
+                .foregroundColor(isSelected ? .white : color)
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .background(isSelected ? color : color.opacity(0.1)).cornerRadius(20)
+        }
+    }
+}
 
+// MARK: - Wish Row
+
+struct WishRow: View {
+    let wish: WishItem; @ObservedObject var store: WishStore
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: icon)
-                .foregroundColor(.green)
-                .frame(width: 28)
-            Text(label)
+            Button(action: { store.toggle(wish) }) {
+                Image(systemName: wish.isDone ? "star.fill" : "star")
+                    .font(.title2).foregroundColor(wish.isDone ? .yellow : wish.category.color)
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(wish.emoji).font(.subheadline)
+                    Text(wish.title).font(.subheadline).fontWeight(.medium)
+                        .strikethrough(wish.isDone).foregroundColor(wish.isDone ? .secondary : .primary)
+                }
+                HStack(spacing: 6) {
+                    Text(wish.category.emoji + " " + wish.category.rawValue)
+                        .font(.caption2).padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(wish.category.color.opacity(0.12)).foregroundColor(wish.category.color).cornerRadius(4)
+                    if !wish.note.isEmpty {
+                        Text(wish.note).font(.caption2).foregroundColor(.secondary).lineLimit(1)
+                    }
+                }
+            }
             Spacer()
-            Text(value)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.trailing)
+            Image(systemName: "chevron.right").font(.caption2).foregroundColor(.secondary.opacity(0.4))
         }
-        .padding(.horizontal)
-        .padding(.vertical, 12)
+        .padding(12).background(Color(.systemBackground)).cornerRadius(12)
+        .shadow(color: .black.opacity(0.04), radius: 3, x: 0, y: 1)
+        .opacity(wish.isDone ? 0.65 : 1.0)
     }
 }
 
-// MARK: - Calc Row
+// MARK: - Add / Edit Wish View
 
-struct CalcRow: View {
-    let label: String
-    let value: String
-
-    var body: some View {
-        HStack {
-            Text(label)
-                .font(.caption)
-                .foregroundColor(.secondary)
-            Spacer()
-            Text(value)
-                .font(.caption)
-                .fontWeight(.medium)
-        }
-    }
-}
-
-// MARK: - Stat Pill
-
-struct StatPill: View {
-    let label: String
-    let value: String
-    let unit: String
-    let color: Color
+struct AddEditWishView: View {
+    @ObservedObject var store: WishStore
+    @Environment(\.dismiss) var dismiss
+    var existing: WishItem?
+    @State private var title = ""; @State private var note = ""
+    @State private var emoji = "⭐"; @State private var category: WishCategory = .personal
+    @State private var targetYear = Calendar.current.component(.year, from: Date())
+    var isEditing: Bool { existing != nil }
+    let quickEmojis = ["⭐","✈️","🏠","💍","🎓","💪","📚","🌍","🎵","💰","🌸","🤝","🏆","🎨","🧘","🚀","🌙","🎯","💻","🌿"]
 
     var body: some View {
-        VStack(spacing: 4) {
-            Text(label)
-                .font(.caption2)
-                .foregroundColor(.secondary)
-            Text(value)
-                .font(.caption)
-                .fontWeight(.semibold)
-                .foregroundColor(color)
-                .multilineTextAlignment(.center)
-            if !unit.isEmpty {
-                Text(unit)
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+        NavigationView {
+            Form {
+                Section("Wish") {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(quickEmojis, id: \.self) { e in
+                                Text(e).font(.system(size: 26)).padding(6)
+                                    .background(emoji == e ? Color.pink.opacity(0.2) : Color.clear)
+                                    .cornerRadius(8).onTapGesture { emoji = e }
+                            }
+                        }.padding(.vertical, 4)
+                    }
+                    TextField("What do you wish for this year?", text: $title)
+                    TextField("Details (optional)", text: $note)
+                }
+                Section("Category") {
+                    Picker("Category", selection: $category) {
+                        ForEach(WishCategory.allCases, id: \.self) { cat in
+                            Text(cat.emoji + " " + cat.rawValue).tag(cat)
+                        }
+                    }.pickerStyle(.wheel).frame(height: 120)
+                }
+                Section("Target Year") {
+                    Stepper("\(String(targetYear))", value: $targetYear, in: 2020...2035)
+                }
+            }
+            .navigationTitle(isEditing ? "Edit Wish" : "New Wish").navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(isEditing ? "Save" : "Add") {
+                        guard !title.isEmpty else { return }
+                        let wish = WishItem(id: existing?.id ?? UUID(), title: title, note: note,
+                            emoji: emoji, isDone: existing?.isDone ?? false, category: category, targetYear: targetYear)
+                        if isEditing, let i = store.wishes.firstIndex(where: { $0.id == wish.id }) {
+                            store.wishes[i] = wish
+                        } else { store.wishes.append(wish) }
+                        dismiss()
+                    }.fontWeight(.bold).disabled(title.isEmpty)
+                }
+            }
+            .onAppear {
+                guard let e = existing else { return }
+                title = e.title; note = e.note; emoji = e.emoji; category = e.category; targetYear = e.targetYear
             }
         }
-        .frame(maxWidth: .infinity)
     }
 }
 
 // MARK: - Edit Profile View
 
 struct EditProfileView: View {
-    @ObservedObject var profile: UserProfile
     @Environment(\.dismiss) var dismiss
-
-    @State private var heightStr = ""
-    @State private var weightStr = ""
-    @State private var ageStr = ""
+    @AppStorage("userName") var userName: String = "Kelly"
+    @AppStorage("userAge") var userAge: Int = 25
+    @AppStorage("userHeight") var userHeight: Double = 160
+    @AppStorage("userWeight") var userWeight: Double = 71
+    @AppStorage("dailyCalorieGoal") var dailyCalorieGoal: Int = 1683
+    @AppStorage("weeklyWeightGoal") var weeklyWeightGoal: Double = 0.5
+    @State private var heightStr = ""; @State private var weightStr = ""
+    @State private var calorieStr = ""; @State private var ageStr = ""
+    @State private var goalStr = ""
 
     var body: some View {
         NavigationView {
             Form {
-                Section("Body Measurements") {
-                    HStack {
-                        Text("Height")
-                        Spacer()
-                        TextField("cm", text: $heightStr)
-                            .keyboardType(.decimalPad)
-                            .multilineTextAlignment(.trailing)
-                            .frame(width: 80)
-                        Text("cm").foregroundColor(.secondary)
-                    }
-                    HStack {
-                        Text("Weight")
-                        Spacer()
-                        TextField("kg", text: $weightStr)
-                            .keyboardType(.decimalPad)
-                            .multilineTextAlignment(.trailing)
-                            .frame(width: 80)
-                        Text("kg").foregroundColor(.secondary)
-                    }
-                    HStack {
-                        Text("Age")
-                        Spacer()
-                        TextField("years", text: $ageStr)
-                            .keyboardType(.numberPad)
-                            .multilineTextAlignment(.trailing)
-                            .frame(width: 80)
-                        Text("years").foregroundColor(.secondary)
-                    }
+                Section("Personal") {
+                    TextField("Name", text: $userName)
+                    HStack { Text("Age").foregroundColor(.secondary); Spacer(); TextField("25", text: $ageStr).keyboardType(.numberPad).multilineTextAlignment(.trailing).frame(width: 80) }
+                    HStack { Text("Height").foregroundColor(.secondary); Spacer(); TextField("160", text: $heightStr).keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 80); Text("cm").foregroundColor(.secondary) }
+                    HStack { Text("Weight").foregroundColor(.secondary); Spacer(); TextField("71", text: $weightStr).keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 80); Text("kg").foregroundColor(.secondary) }
                 }
-
-                Section("Gender") {
-                    Picker("Gender", selection: $profile.gender) {
-                        ForEach(Gender.allCases, id: \.self) { g in
-                            Text(g.label).tag(g)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                }
-
-                Section("Activity Level") {
-                    Picker("Activity", selection: $profile.activityLevel) {
-                        ForEach(ActivityLevel.allCases, id: \.self) { a in
-                            Text(a.label).tag(a)
-                        }
-                    }
-                    .pickerStyle(.wheel)
-                    .frame(height: 140)
-                }
-
-                Section("Weight Goal") {
-                    Picker("Goal", selection: $profile.goal) {
-                        ForEach(WeightGoal.allCases, id: \.self) { g in
-                            Text(g.label).tag(g)
-                        }
-                    }
-                    .pickerStyle(.wheel)
-                    .frame(height: 140)
-                }
-
-                Section("Your Estimated Daily Goal") {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("\(profile.dailyCalorieGoal) kcal / day")
-                                .font(.title2)
-                                .fontWeight(.bold)
-                                .foregroundColor(.green)
-                            Text("BMR \(Int(profile.bmr)) × \(profile.activityLevel.multiplier) \(profile.goal.adjustment >= 0 ? "+" : "")\(Int(profile.goal.adjustment))")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                        Spacer()
-                    }
-                    .padding(.vertical, 4)
+                Section("Goals") {
+                    HStack { Text("Daily Calories").foregroundColor(.secondary); Spacer(); TextField("1683", text: $calorieStr).keyboardType(.numberPad).multilineTextAlignment(.trailing).frame(width: 80); Text("kcal").foregroundColor(.secondary) }
+                    HStack { Text("Weekly Weight Goal").foregroundColor(.secondary); Spacer(); TextField("0.5", text: $goalStr).keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 80); Text("kg").foregroundColor(.secondary) }
                 }
             }
-            .navigationTitle("Edit Profile")
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("Edit Profile").navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") { dismiss() }
-                }
+                ToolbarItem(placement: .navigationBarLeading) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Save") {
-                        if let h = Double(heightStr) { profile.height = h }
-                        if let w = Double(weightStr) { profile.weight = w }
-                        if let a = Int(ageStr) { profile.age = a }
-                        profile.setupDone = true
+                        if let a = Int(ageStr) { userAge = a }
+                        if let h = Double(heightStr) { userHeight = h }
+                        if let w = Double(weightStr) { userWeight = w }
+                        if let c = Int(calorieStr) { dailyCalorieGoal = c }
+                        if let g = Double(goalStr) { weeklyWeightGoal = g }
                         dismiss()
-                    }
-                    .fontWeight(.bold)
+                    }.fontWeight(.bold)
                 }
             }
             .onAppear {
-                heightStr = "\(Int(profile.height))"
-                weightStr = String(format: "%.1f", profile.weight)
-                ageStr = "\(profile.age)"
+                ageStr = "\(userAge)"; heightStr = String(format: "%.0f", userHeight)
+                weightStr = String(format: "%.1f", userWeight)
+                calorieStr = "\(dailyCalorieGoal)"; goalStr = String(format: "%.1f", weeklyWeightGoal)
             }
         }
     }

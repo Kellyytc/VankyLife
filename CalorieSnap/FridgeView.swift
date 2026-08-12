@@ -734,7 +734,7 @@ struct AddEditFridgeItemView: View {
                 if trackingMode == .count {
                     Section("Count Setup") {
                         HStack {
-                            Text("Total I bought").foregroundColor(.secondary)
+                            Text("Total I need").foregroundColor(.secondary)
                             Spacer()
                             Stepper("", value: $totalCount, in: 1...999).labelsHidden()
                             Text("\(totalCount)").font(.headline).fontWeight(.bold)
