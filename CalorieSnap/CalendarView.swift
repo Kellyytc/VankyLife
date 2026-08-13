@@ -996,19 +996,100 @@ struct CountdownBar: View {
 
 struct CountdownChip: View {
     let event: CalendarEvent
-    var body: some View {
-        VStack(spacing: 6) {
-            Text(event.emoji).font(.system(size: 28))
-                .frame(width: 52, height: 52)
-                .background(event.urgencyColor.opacity(0.12)).cornerRadius(12)
-                .overlay(event.isToday ? RoundedRectangle(cornerRadius: 12).stroke(event.urgencyColor, lineWidth: 2) : nil)
-            Text(event.title).font(.caption2).fontWeight(.medium).lineLimit(1).frame(width: 64)
-            Text(event.countdownLabel).font(.caption2).fontWeight(.bold).foregroundColor(event.urgencyColor)
-            if event.isAnniversary { Text("🔁 Yearly").font(.system(size: 9)).foregroundColor(.secondary) }
+    @State private var showingCountdown = true
+
+    var yearsElapsed: Int {
+        Calendar.current.dateComponents([.year],
+            from: Calendar.current.startOfDay(for: event.date),
+            to: Calendar.current.startOfDay(for: Date())).year ?? 0
+    }
+    var daysElapsed: Int {
+        Calendar.current.dateComponents([.day],
+            from: Calendar.current.startOfDay(for: event.date),
+            to: Calendar.current.startOfDay(for: Date())).day ?? 0
+    }
+    var daysToNext: Int {
+        guard event.isAnniversary else { return max(event.daysFromNow, 0) }
+        let cal = Calendar.current
+        let now = cal.startOfDay(for: Date())
+        var comps = cal.dateComponents([.month, .day], from: event.date)
+        comps.year = cal.component(.year, from: now)
+        var next = cal.date(from: comps) ?? event.date
+        if next <= now { comps.year! += 1; next = cal.date(from: comps) ?? event.date }
+        return cal.dateComponents([.day], from: now, to: next).day ?? 0
+    }
+
+    var topLabel: String {
+        if event.isToday { return "Today!" }
+        if showingCountdown {
+            if daysToNext == 1 { return "1 day" }
+            return "\(daysToNext)d left"
+        } else {
+            if yearsElapsed > 0 {
+                let rem = daysElapsed % 365
+                return "\(yearsElapsed)y \(rem)d"
+            }
+            return "\(daysElapsed) days"
         }
-        .frame(width: 72).padding(.vertical, 8).padding(.horizontal, 4)
-        .background(Color(.systemBackground)).cornerRadius(14)
-        .shadow(color: .black.opacity(0.06), radius: 4, x: 0, y: 2)
+    }
+
+    var modeIcon: String { showingCountdown ? "⏳" : "💝" }
+
+    var chipColor: Color {
+        if event.isToday { return .orange }
+        if showingCountdown {
+            if daysToNext <= 7  { return .red }
+            if daysToNext <= 30 { return .orange }
+            return .blue
+        }
+        return .pink
+    }
+
+    var body: some View {
+        VStack(spacing: 5) {
+            // Emoji — clean, no overlay
+            Text(event.emoji)
+                .font(.system(size: 30))
+                .frame(width: 54, height: 54)
+                .background(chipColor.opacity(0.12))
+                .cornerRadius(12)
+                .overlay(
+                    event.isToday
+                        ? RoundedRectangle(cornerRadius: 12).stroke(chipColor, lineWidth: 2)
+                        : nil
+                )
+
+            // Title
+            Text(event.title)
+                .font(.system(size: 10)).fontWeight(.medium)
+                .lineLimit(1)
+                .frame(width: 72)
+                .multilineTextAlignment(.center)
+
+            // Count label
+            Text(topLabel)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundColor(chipColor)
+                .animation(.spring(response: 0.3), value: showingCountdown)
+
+            // Mode row — tap hint
+            HStack(spacing: 3) {
+                Text(modeIcon).font(.system(size: 9))
+                Text(showingCountdown ? "to next" : "since")
+                    .font(.system(size: 9))
+                    .foregroundColor(.secondary)
+            }
+        }
+        .frame(width: 80)
+        .padding(.vertical, 10).padding(.horizontal, 6)
+        .background(Color(.systemBackground))
+        .cornerRadius(14)
+        .shadow(color: .black.opacity(0.07), radius: 5, x: 0, y: 2)
+        .onTapGesture {
+            withAnimation(.spring(response: 0.35)) {
+                showingCountdown.toggle()
+            }
+        }
     }
 }
 
