@@ -560,8 +560,6 @@ struct CalendarView: View {
                         ).padding(.horizontal)
                     }
 
-                    // Weight trend
-                    WeightTrendCard(store: store).padding(.horizontal)
                 }
             }
             .navigationTitle("Calendar")
@@ -1311,80 +1309,5 @@ struct AnniversaryDayCard: View {
                                    startPoint: .leading, endPoint: .trailing))
         .cornerRadius(14)
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.orange.opacity(0.3), lineWidth: 1))
-    }
-}
-
-// MARK: - Weight Trend Card
-
-struct WeightTrendCard: View {
-    @ObservedObject var store: CalendarStore
-    var last14Days: [(date: Date, entries: [WeightEntry])] {
-        (0..<14).compactMap { offset -> (Date, [WeightEntry])? in
-            let d = Calendar.current.date(byAdding: .day, value: -offset, to: Date())!
-            let e = store.weightEntriesForDate(d); return e.isEmpty ? nil : (d, e)
-        }.reversed()
-    }
-    var trendPoints: [(date: Date, weight: Double)] {
-        last14Days.compactMap { day in
-            guard let w = day.entries.sorted(by: { $0.time > $1.time }).first?.weight else { return nil }
-            return (day.date, w)
-        }
-    }
-    var minW: Double { trendPoints.map { $0.weight }.min() ?? 60 }
-    var maxW: Double { trendPoints.map { $0.weight }.max() ?? 80 }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Weight Trend (14 days)").font(.headline)
-                Spacer()
-                if let latest = trendPoints.last {
-                    Text(String(format: "%.1f kg", latest.weight)).font(.subheadline).fontWeight(.semibold).foregroundColor(.blue)
-                }
-            }
-            if trendPoints.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "chart.line.uptrend.xyaxis").font(.system(size: 36)).foregroundColor(.secondary.opacity(0.4))
-                    Text("No weight data yet").font(.subheadline).foregroundColor(.secondary)
-                }.frame(maxWidth: .infinity).padding(.vertical, 20)
-            } else {
-                GeometryReader { geo in
-                    let w = geo.size.width; let h = geo.size.height
-                    let range = max(maxW - minW, 1.0); let pad = 2.0
-                    ZStack {
-                        ForEach(0..<4) { i in
-                            Path { p in let y = h * CGFloat(i) / 3; p.move(to: CGPoint(x: 0, y: y)); p.addLine(to: CGPoint(x: w, y: y)) }
-                                .stroke(Color.secondary.opacity(0.1), lineWidth: 1)
-                        }
-                        if trendPoints.count > 1 {
-                            Path { p in
-                                for (i, pt) in trendPoints.enumerated() {
-                                    let x = w * CGFloat(i) / CGFloat(trendPoints.count - 1)
-                                    let n = (pt.weight - minW + pad) / (range + pad * 2)
-                                    let y = h * CGFloat(1 - n)
-                                    if i == 0 { p.move(to: CGPoint(x: x, y: y)) } else { p.addLine(to: CGPoint(x: x, y: y)) }
-                                }
-                            }.stroke(Color.blue, style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
-                        }
-                        ForEach(0..<trendPoints.count, id: \.self) { i in
-                            let pt = trendPoints[i]
-                            let x = trendPoints.count == 1 ? w / 2 : w * CGFloat(i) / CGFloat(trendPoints.count - 1)
-                            let n = (pt.weight - minW + pad) / (range + pad * 2)
-                            let y = h * CGFloat(1 - n)
-                            Circle().fill(Color.blue).frame(width: 8, height: 8).position(x: x, y: y)
-                            Text(String(format: "%.1f", pt.weight)).font(.system(size: 8)).foregroundColor(.blue).position(x: x, y: max(y - 12, 8))
-                        }
-                    }
-                }.frame(height: 120)
-                if trendPoints.count >= 2 {
-                    let diff = trendPoints.last!.weight - trendPoints.first!.weight
-                    HStack(spacing: 6) {
-                        Image(systemName: diff < 0 ? "arrow.down.circle.fill" : diff > 0 ? "arrow.up.circle.fill" : "minus.circle.fill")
-                            .foregroundColor(diff < 0 ? .green : diff > 0 ? .red : .secondary)
-                        Text(diff == 0 ? "Stable" : String(format: "%.1f kg in 14 days", abs(diff)))
-                            .font(.caption).foregroundColor(diff < 0 ? .green : diff > 0 ? .red : .secondary)
-                    }
-                }
-            }
-        }.padding().background(.regularMaterial).cornerRadius(16)
     }
 }

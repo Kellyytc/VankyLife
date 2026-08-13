@@ -103,7 +103,7 @@ struct ContentView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.bottom, 60)
+            .padding(.bottom, 46)
 
             HStack(spacing: 0) {
                 CustomTabItem(icon: "flame.fill",        label: "Today",    tag: 0, selected: $selectedTab)
@@ -112,7 +112,7 @@ struct ContentView: View {
                 CustomTabItem(icon: "dollarsign.circle", label: "Finance",  tag: 3, selected: $selectedTab)
                 CustomTabItem(icon: "person.circle",     label: "Profile",  tag: 4, selected: $selectedTab)
             }
-            .padding(.horizontal, 4).padding(.vertical, 8)
+            .padding(.horizontal, 2).padding(.vertical, 4)
             .background(.regularMaterial)
             .overlay(Divider(), alignment: .top)
         }
@@ -125,16 +125,16 @@ struct CustomTabItem: View {
     var isSelected: Bool { selected == tag }
     var body: some View {
         Button(action: { selected = tag }) {
-            VStack(spacing: 4) {
+            VStack(spacing: 2) {
                 Image(systemName: icon)
-                    .font(.system(size: 24, weight: .regular))
-                    .foregroundColor(isSelected ? .green : Color(.systemGray))
+                    .font(.system(size: 17))
+                    .foregroundColor(isSelected ? .green : .secondary)
                 Text(label)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(isSelected ? .green : Color(.systemGray))
+                    .font(.system(size: 8))
+                    .foregroundColor(isSelected ? .green : .secondary)
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 8)
+            .padding(.vertical, 3)
         }
     }
 }
@@ -183,8 +183,6 @@ struct DashboardView: View {
         return groups.map { (date: $0.key, logs: $0.value.sorted { $0.date < $1.date }) }.sorted { $0.date < $1.date }
     }
     var latestWeightLog: WeightLog? { weightLogs.sorted { $0.date > $1.date }.first }
-    var minWeight: Double { recentWeightLogs.map { $0.weight }.min() ?? 60 }
-    var maxWeight: Double { recentWeightLogs.map { $0.weight }.max() ?? 80 }
     var screenWidth: CGFloat {
         (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.screen.bounds.width ?? 390
     }
@@ -365,87 +363,8 @@ struct DashboardView: View {
                         // Finance summary
                         MonthFinanceSummary(store: financeStore).padding(.horizontal)
 
-                        // Weight trend
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack {
-                                Text("Weight Trend").font(.headline)
-                                Spacer()
-                                if let latest = latestWeightLog {
-                                    Text(String(format: "Latest %.1f kg", latest.weight))
-                                        .font(.subheadline).fontWeight(.semibold).foregroundColor(.blue)
-                                }
-                            }
-                            if recentWeightLogs.isEmpty {
-                                VStack(spacing: 8) {
-                                    Image(systemName: "scalemass").font(.system(size: 36)).foregroundColor(.secondary.opacity(0.4))
-                                    Text("No weight logged yet").font(.subheadline).foregroundColor(.secondary)
-                                    Text("Tap + then Log Weight").font(.caption).foregroundColor(.secondary)
-                                }.frame(maxWidth: .infinity).padding(.vertical, 20)
-                            } else {
-                                GeometryReader { geo in
-                                    let w = geo.size.width; let h = geo.size.height
-                                    let range = maxWeight - minWeight == 0 ? 1 : maxWeight - minWeight
-                                    let pad: Double = 2
-                                    ZStack {
-                                        ForEach(0..<4) { i in
-                                            Path { path in
-                                                let y = h * CGFloat(i) / 3
-                                                path.move(to: CGPoint(x: 0, y: y)); path.addLine(to: CGPoint(x: w, y: y))
-                                            }.stroke(Color.secondary.opacity(0.1), lineWidth: 1)
-                                        }
-                                        if recentWeightLogs.count > 1 {
-                                            Path { path in
-                                                for (i, entry) in recentWeightLogs.enumerated() {
-                                                    let x = w * CGFloat(i) / CGFloat(recentWeightLogs.count - 1)
-                                                    let n = (entry.weight - minWeight + pad) / (range + pad * 2)
-                                                    let y = h * CGFloat(1 - n)
-                                                    if i == 0 { path.move(to: CGPoint(x: x, y: y)) } else { path.addLine(to: CGPoint(x: x, y: y)) }
-                                                }
-                                            }.stroke(Color.blue, style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
-                                        }
-                                        ForEach(Array(recentWeightLogs.enumerated()), id: \.element.id) { i, entry in
-                                            let x = recentWeightLogs.count == 1 ? w / 2 : w * CGFloat(i) / CGFloat(recentWeightLogs.count - 1)
-                                            let n = (entry.weight - minWeight + pad) / (range + pad * 2)
-                                            let y = h * CGFloat(1 - n)
-                                            Circle().fill(Color.blue).frame(width: 14, height: 14).position(x: x, y: y).onTapGesture { selectedWeightLog = entry }
-                                            Text(String(format: "%.1f", entry.weight)).font(.system(size: 9)).foregroundColor(.blue).position(x: x, y: max(y - 14, 10))
-                                            Text(shortTimeString(entry.date)).font(.system(size: 8)).foregroundColor(.secondary).position(x: x, y: h + 12)
-                                        }
-                                    }
-                                }.frame(height: 120).padding(.bottom, 20)
-
-                                VStack(alignment: .leading, spacing: 8) {
-                                    Text("Recent Logs").font(.caption).foregroundColor(.secondary)
-                                    ForEach(groupedRecentWeightLogs, id: \.date) { group in
-                                        VStack(alignment: .leading, spacing: 6) {
-                                            Text(dayLabel(group.date)).font(.caption2).fontWeight(.semibold).foregroundColor(.secondary)
-                                            FlowLayout(spacing: 6) {
-                                                ForEach(group.logs) { log in
-                                                    HStack(spacing: 4) {
-                                                        Text(shortTimeString(log.date))
-                                                        Text(String(format: "%.1f kg", log.weight)).fontWeight(.semibold)
-                                                    }
-                                                    .font(.caption2).padding(.horizontal, 8).padding(.vertical, 5)
-                                                    .background(Color.blue.opacity(0.08)).cornerRadius(8)
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                if recentWeightLogs.count >= 2 {
-                                    let diff = recentWeightLogs.last!.weight - recentWeightLogs.first!.weight
-                                    HStack(spacing: 6) {
-                                        Image(systemName: diff < 0 ? "arrow.down.circle.fill" : diff > 0 ? "arrow.up.circle.fill" : "minus.circle.fill")
-                                            .foregroundColor(diff < 0 ? .green : diff > 0 ? .red : .secondary)
-                                        Text(diff < 0 ? String(format: "%.1f kg lower than 7 days ago 🎉", abs(diff))
-                                             : diff > 0 ? String(format: "%.1f kg higher than 7 days ago", diff) : "Weight stable")
-                                            .font(.caption).foregroundColor(diff < 0 ? .green : diff > 0 ? .red : .secondary)
-                                    }
-                                }
-                            }
-                        }
-                        .padding().background(.regularMaterial).cornerRadius(16).padding(.horizontal)
+                        // Weight trend — week/month/year with comparisons
+                        WeightTrendDashboard().padding(.horizontal)
 
                         // Apple Health
                         VStack(alignment: .leading, spacing: 14) {
@@ -581,9 +500,21 @@ struct DashboardView: View {
         }
         .sheet(isPresented: $showingAddTransactionSheet) { AddTransactionView(store: financeStore) }
         .sheet(item: $selectedWeightLog) { log in
-            WeightLogDetailView(log: log) { WeightLog.delete(log); weightLogs = WeightLog.loadAll() }
+            WeightLogDetailView(
+                log: log,
+                onUpdate: { updated in
+                    WeightLog.update(updated)
+                    weightLogs = WeightLog.loadAll()
+                },
+                onDelete: {
+                    WeightLog.delete(log)
+                    weightLogs = WeightLog.loadAll()
+                }
+            )
         }
-        .sheet(isPresented: $showAddTodo) { AddEditTodoView(store: todoStore) }
+        .sheet(isPresented: $showAddTodo) {
+            AddEditTodoView(store: todoStore)
+        }
         .sheet(item: $editingTodo) { todo in AddEditTodoView(store: todoStore, existing: todo) }
         .confirmationDialog("What would you like to log?", isPresented: $showingQuickLogOptions, titleVisibility: .visible) {
             Button("Log Meal") { withAnimation(.spring(response: 0.35)) { showingLogPanel = true; dragOffset = 0 } }
@@ -1037,23 +968,69 @@ struct HealthStatCard: View {
 // MARK: - Weight Log Model
 
 struct WeightLog: Identifiable, Codable, Hashable {
-    var id = UUID(); var weight: Double; var date: Date = Date(); var note: String = ""
+    var id = UUID()
+    var weight: Double
+    var date: Date = Date()
+    var note: String = ""
+
     static let storageKey = "weightLogs"
+
     static func loadAll() -> [WeightLog] {
         guard let data = UserDefaults.standard.data(forKey: storageKey),
-              let logs = try? JSONDecoder().decode([WeightLog].self, from: data) else { return [] }
-        return logs.sorted { $0.date > $1.date }
+              let logs = try? JSONDecoder().decode([WeightLog].self, from: data)
+        else {
+            return []
+        }
+
+        return logs.sorted {
+            $0.date > $1.date
+        }
     }
+
     static func save(_ log: WeightLog) {
-        var all = loadAll(); all.append(log)
-        if let data = try? JSONEncoder().encode(all) { UserDefaults.standard.set(data, forKey: storageKey) }
+        var all = loadAll()
+        all.append(log)
+
+        if let data = try? JSONEncoder().encode(all) {
+            UserDefaults.standard.set(data, forKey: storageKey)
+        }
     }
+
+    static func update(_ log: WeightLog) {
+        var all = loadAll()
+
+        guard let index = all.firstIndex(where: {
+            $0.id == log.id
+        }) else {
+            return
+        }
+
+        all[index] = log
+
+        if let data = try? JSONEncoder().encode(all) {
+            UserDefaults.standard.set(data, forKey: storageKey)
+        }
+    }
+
     static func delete(_ log: WeightLog) {
-        var all = loadAll(); all.removeAll { $0.id == log.id }
-        if let data = try? JSONEncoder().encode(all) { UserDefaults.standard.set(data, forKey: storageKey) }
+        var all = loadAll()
+
+        all.removeAll {
+            $0.id == log.id
+        }
+
+        if let data = try? JSONEncoder().encode(all) {
+            UserDefaults.standard.set(data, forKey: storageKey)
+        }
     }
+
     static func logs(for date: Date) -> [WeightLog] {
-        loadAll().filter { Calendar.current.isDate($0.date, inSameDayAs: date) }
+        loadAll().filter {
+            Calendar.current.isDate(
+                $0.date,
+                inSameDayAs: date
+            )
+        }
     }
 }
 
@@ -1251,40 +1228,287 @@ struct NutritionBadge: View {
 // MARK: - Weight Log Detail View
 
 struct WeightLogDetailView: View {
-    let log: WeightLog; let onDelete: () -> Void
+    let log: WeightLog
+    let onUpdate: (WeightLog) -> Void
+    let onDelete: () -> Void
+
     @Environment(\.dismiss) var dismiss
+
+    @State private var isEditing = false
+    @State private var editedWeight = ""
+    @State private var editedDate = Date()
+    @State private var editedNote = ""
+
     var body: some View {
         NavigationView {
             List {
+
                 Section("Weight") {
-                    HStack { Label("Value", systemImage: "scalemass"); Spacer()
-                        Text(String(format: "%.1f kg", log.weight)).fontWeight(.semibold).foregroundColor(.blue) }
+                    if isEditing {
+                        HStack {
+                            Label("Value", systemImage: "scalemass")
+                            Spacer()
+
+                            TextField("Weight", text: $editedWeight)
+                                .keyboardType(.decimalPad)
+                                .multilineTextAlignment(.trailing)
+                                .frame(width: 100)
+
+                            Text("kg")
+                                .foregroundColor(.secondary)
+                        }
+                    } else {
+                        HStack {
+                            Label("Value", systemImage: "scalemass")
+                            Spacer()
+
+                            Text(String(format: "%.1f kg", log.weight))
+                                .fontWeight(.semibold)
+                                .foregroundColor(.blue)
+                        }
+                    }
                 }
+
                 Section("Time") {
-                    HStack { Label("Date", systemImage: "calendar"); Spacer(); Text(dateString(log.date)).foregroundColor(.secondary) }
-                    HStack { Label("Time", systemImage: "clock"); Spacer(); Text(timeString(log.date)).foregroundColor(.secondary) }
-                    HStack { Label("Period", systemImage: timeIcon(log.date)); Spacer(); Text(periodLabel(log.date)).foregroundColor(.secondary) }
+                    if isEditing {
+                        DatePicker(
+                            "Date & Time",
+                            selection: $editedDate
+                        )
+                    } else {
+                        HStack {
+                            Label("Date", systemImage: "calendar")
+                            Spacer()
+                            Text(dateString(log.date))
+                                .foregroundColor(.secondary)
+                        }
+
+                        HStack {
+                            Label("Time", systemImage: "clock")
+                            Spacer()
+                            Text(timeString(log.date))
+                                .foregroundColor(.secondary)
+                        }
+
+                        HStack {
+                            Label(
+                                "Period",
+                                systemImage: timeIcon(log.date)
+                            )
+
+                            Spacer()
+
+                            Text(periodLabel(log.date))
+                                .foregroundColor(.secondary)
+                        }
+                    }
                 }
-                if !log.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Section("Note") { Text(log.note) }
+
+                Section("Note") {
+                    if isEditing {
+
+                        TextField(
+                            "Optional note",
+                            text: $editedNote
+                        )
+
+                    } else if log.note
+                        .trimmingCharacters(
+                            in: .whitespacesAndNewlines
+                        )
+                        .isEmpty {
+
+                        Text("No note")
+                            .foregroundColor(.secondary)
+
+                    } else {
+
+                        Text(log.note)
+                    }
                 }
-                Section { Button(role: .destructive) { onDelete(); dismiss() } label: { Label("Delete this weight log", systemImage: "trash") } }
+
+                if !isEditing {
+
+                    Section {
+
+                        Button {
+                            editedWeight =
+                                String(
+                                    format: "%.1f",
+                                    log.weight
+                                )
+
+                            editedDate = log.date
+                            editedNote = log.note
+
+                            isEditing = true
+
+                        } label: {
+
+                            Label(
+                                "Edit this weight log",
+                                systemImage: "pencil"
+                            )
+                        }
+
+                        Button(role: .destructive) {
+                            onDelete()
+                            dismiss()
+
+                        } label: {
+
+                            Label(
+                                "Delete this weight log",
+                                systemImage: "trash"
+                            )
+                        }
+                    }
+                }
             }
-            .navigationTitle("Weight Detail").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("Done") { dismiss() } } }
+
+            .navigationTitle(
+                isEditing
+                ? "Edit Weight"
+                : "Weight Detail"
+            )
+
+            .navigationBarTitleDisplayMode(
+                .inline
+            )
+
+            .toolbar {
+
+                ToolbarItem(
+                    placement:
+                        .navigationBarLeading
+                ) {
+                    if isEditing {
+                        Button("Cancel") {
+                            isEditing = false
+                        }
+                    }
+                }
+
+                ToolbarItem(
+                    placement:
+                        .navigationBarTrailing
+                ) {
+
+                    if isEditing {
+
+                        Button("Save") {
+
+                            guard let value =
+                                    Double(editedWeight)
+                            else {
+                                return
+                            }
+
+                            let updated =
+                                WeightLog(
+                                    id: log.id,
+                                    weight: value,
+                                    date: editedDate,
+                                    note: editedNote
+                                )
+
+                            onUpdate(updated)
+
+                            dismiss()
+                        }
+
+                        .fontWeight(.bold)
+
+                        .disabled(
+                            Double(editedWeight) == nil
+                        )
+
+                    } else {
+
+                        Button("Done") {
+                            dismiss()
+                        }
+                    }
+                }
+            }
+
+            .onAppear {
+
+                editedWeight =
+                    String(
+                        format: "%.1f",
+                        log.weight
+                    )
+
+                editedDate = log.date
+                editedNote = log.note
+            }
         }
     }
-    func dateString(_ date: Date) -> String { let f = DateFormatter(); f.dateStyle = .full; return f.string(from: date) }
-    func timeString(_ date: Date) -> String { let f = DateFormatter(); f.timeStyle = .short; return f.string(from: date) }
-    func periodLabel(_ date: Date) -> String {
-        let h = Calendar.current.component(.hour, from: date)
-        if h < 12 { return "Morning" }; if h < 18 { return "Afternoon" }; return "Evening"
+
+    func dateString(
+        _ date: Date
+    ) -> String {
+
+        let f = DateFormatter()
+        f.dateStyle = .full
+
+        return f.string(from: date)
     }
-    func timeIcon(_ date: Date) -> String {
-        let h = Calendar.current.component(.hour, from: date)
-        if h < 12 { return "sunrise.fill" }; if h < 18 { return "sun.max.fill" }; return "moon.fill"
+
+    func timeString(
+        _ date: Date
+    ) -> String {
+
+        let f = DateFormatter()
+        f.timeStyle = .short
+
+        return f.string(from: date)
+    }
+
+    func periodLabel(
+        _ date: Date
+    ) -> String {
+
+        let h =
+            Calendar.current.component(
+                .hour,
+                from: date
+            )
+
+        if h < 12 {
+            return "Morning"
+        }
+
+        if h < 18 {
+            return "Afternoon"
+        }
+
+        return "Evening"
+    }
+
+    func timeIcon(
+        _ date: Date
+    ) -> String {
+
+        let h =
+            Calendar.current.component(
+                .hour,
+                from: date
+            )
+
+        if h < 12 {
+            return "sunrise.fill"
+        }
+
+        if h < 18 {
+            return "sun.max.fill"
+        }
+
+        return "moon.fill"
     }
 }
+
 
 // MARK: - Dashboard Celebration View
 
@@ -1359,6 +1583,1923 @@ struct DashParticle: Identifiable {
     let size: CGFloat
     let opacity: Double
     let rotation: Double
+}
+
+// MARK: - Weight Trend Dashboard
+
+struct WeightTrendDashboard: View {
+
+    enum TrendPeriod: String, CaseIterable {
+        case week = "Week"
+        case month = "Month"
+        case year = "Year"
+    }
+
+    struct TrendPoint: Identifiable {
+        let id = UUID()
+
+        let date: Date
+        let weight: Double
+
+        // Original entries included in this point
+        let logs: [WeightLog]
+    }
+
+    @State private var selectedPeriod:
+        TrendPeriod = .week
+
+    @State private var selectedPoint:
+        TrendPoint?
+
+    @State private var selectedLog:
+        WeightLog?
+
+    @State private var showEntries = false
+
+    @State private var refreshID =
+        UUID()
+
+
+    // MARK: All Logs
+
+    var allLogs: [WeightLog] {
+
+        WeightLog
+            .loadAll()
+            .sorted {
+                $0.date < $1.date
+            }
+    }
+
+
+    // MARK: Current Period
+
+    var periodLogs: [WeightLog] {
+
+        let cal =
+            Calendar.current
+
+        let now =
+            Date()
+
+
+        switch selectedPeriod {
+
+        case .week:
+
+            let start =
+                cal.date(
+                    byAdding: .day,
+                    value: -6,
+                    to:
+                        cal.startOfDay(
+                            for: now
+                        )
+                )
+                ??
+                now
+
+            return allLogs.filter {
+                $0.date >= start
+            }
+
+
+        case .month:
+
+            let start =
+                cal.date(
+                    byAdding: .day,
+                    value: -29,
+                    to:
+                        cal.startOfDay(
+                            for: now
+                        )
+                )
+                ??
+                now
+
+            return allLogs.filter {
+                $0.date >= start
+            }
+
+
+        case .year:
+
+            let start =
+                cal.date(
+                    byAdding: .day,
+                    value: -364,
+                    to:
+                        cal.startOfDay(
+                            for: now
+                        )
+                )
+                ??
+                now
+
+            return allLogs.filter {
+                $0.date >= start
+            }
+        }
+    }
+
+
+    // MARK: Previous Period
+
+    var previousPeriodLogs: [WeightLog] {
+
+        let cal =
+            Calendar.current
+
+        let now =
+            Date()
+
+
+        switch selectedPeriod {
+
+        case .week:
+
+            let end =
+                cal.date(
+                    byAdding: .day,
+                    value: -7,
+                    to:
+                        cal.startOfDay(
+                            for: now
+                        )
+                )
+                ??
+                now
+
+            let start =
+                cal.date(
+                    byAdding: .day,
+                    value: -13,
+                    to:
+                        cal.startOfDay(
+                            for: now
+                        )
+                )
+                ??
+                now
+
+            return allLogs.filter {
+                $0.date >= start &&
+                $0.date < end
+            }
+
+
+        case .month:
+
+            let end =
+                cal.date(
+                    byAdding: .day,
+                    value: -30,
+                    to:
+                        cal.startOfDay(
+                            for: now
+                        )
+                )
+                ??
+                now
+
+            let start =
+                cal.date(
+                    byAdding: .day,
+                    value: -59,
+                    to:
+                        cal.startOfDay(
+                            for: now
+                        )
+                )
+                ??
+                now
+
+            return allLogs.filter {
+                $0.date >= start &&
+                $0.date < end
+            }
+
+
+        case .year:
+
+            let end =
+                cal.date(
+                    byAdding: .day,
+                    value: -365,
+                    to:
+                        cal.startOfDay(
+                            for: now
+                        )
+                )
+                ??
+                now
+
+            let start =
+                cal.date(
+                    byAdding: .day,
+                    value: -729,
+                    to:
+                        cal.startOfDay(
+                            for: now
+                        )
+                )
+                ??
+                now
+
+            return allLogs.filter {
+                $0.date >= start &&
+                $0.date < end
+            }
+        }
+    }
+
+
+    // MARK: Chart Points
+
+    var chartPoints: [TrendPoint] {
+
+        let cal =
+            Calendar.current
+
+
+        switch selectedPeriod {
+
+        // Week = every input is a point
+        case .week:
+
+            return periodLogs.map {
+
+                TrendPoint(
+                    date: $0.date,
+                    weight: $0.weight,
+                    logs: [$0]
+                )
+            }
+
+
+        // Month = one point per day
+        case .month:
+
+            let grouped =
+                Dictionary(
+                    grouping:
+                        periodLogs
+                ) {
+                    cal.startOfDay(
+                        for: $0.date
+                    )
+                }
+
+
+            return grouped
+                .map {
+                    day,
+                    logs in
+
+
+                    let avg =
+                        logs
+                            .map(\.weight)
+                            .reduce(0, +)
+                        /
+                        Double(
+                            logs.count
+                        )
+
+
+                    return TrendPoint(
+                        date: day,
+                        weight: avg,
+
+                        logs:
+                            logs.sorted {
+                                $0.date <
+                                $1.date
+                            }
+                    )
+                }
+
+                .sorted {
+                    $0.date < $1.date
+                }
+
+
+        // Year = one point per week
+        case .year:
+
+            let grouped =
+                Dictionary(
+                    grouping:
+                        periodLogs
+                ) {
+
+                    cal
+                        .dateInterval(
+                            of: .weekOfYear,
+                            for: $0.date
+                        )?
+                        .start
+
+                    ??
+                    $0.date
+                }
+
+
+            return grouped
+                .map {
+                    weekStart,
+                    logs in
+
+
+                    let avg =
+                        logs
+                            .map(\.weight)
+                            .reduce(0, +)
+                        /
+                        Double(
+                            logs.count
+                        )
+
+
+                    return TrendPoint(
+                        date: weekStart,
+                        weight: avg,
+
+                        logs:
+                            logs.sorted {
+                                $0.date <
+                                $1.date
+                            }
+                    )
+                }
+
+                .sorted {
+                    $0.date < $1.date
+                }
+        }
+    }
+
+
+    // MARK: Stats
+
+    var latest: Double? {
+        periodLogs.last?.weight
+    }
+
+
+    var periodAvg: Double? {
+
+        guard !periodLogs.isEmpty
+        else {
+            return nil
+        }
+
+
+        return periodLogs
+            .map(\.weight)
+            .reduce(0, +)
+        /
+        Double(
+            periodLogs.count
+        )
+    }
+
+
+    var prevAvg: Double? {
+
+        guard !previousPeriodLogs.isEmpty
+        else {
+            return nil
+        }
+
+
+        return previousPeriodLogs
+            .map(\.weight)
+            .reduce(0, +)
+        /
+        Double(
+            previousPeriodLogs.count
+        )
+    }
+
+
+    var periodDiff: Double? {
+
+        guard
+            let current =
+                periodAvg,
+
+            let previous =
+                prevAvg
+
+        else {
+            return nil
+        }
+
+
+        return current -
+               previous
+    }
+
+
+    var periodChange: Double? {
+
+        guard
+            let first =
+                periodLogs.first?.weight,
+
+            let last =
+                periodLogs.last?.weight
+
+        else {
+            return nil
+        }
+
+
+        return last - first
+    }
+
+
+    var minW: Double {
+
+        (
+            chartPoints
+                .map(\.weight)
+                .min()
+            ??
+            60
+        )
+        -
+        0.5
+    }
+
+
+    var maxW: Double {
+
+        (
+            chartPoints
+                .map(\.weight)
+                .max()
+            ??
+            80
+        )
+        +
+        0.5
+    }
+
+
+    var compareLabel: String {
+
+        switch selectedPeriod {
+
+        case .week:
+            return "vs last week"
+
+        case .month:
+            return "vs last month"
+
+        case .year:
+            return "vs last year"
+        }
+    }
+
+
+    var entriesTitle: String {
+
+        switch selectedPeriod {
+
+        case .week:
+            return "Entries This Week"
+
+        case .month:
+            return "Entries This Month"
+
+        case .year:
+            return "Entries This Year"
+        }
+    }
+
+
+    // MARK: Body
+
+    var body: some View {
+
+        VStack(
+            alignment: .leading,
+            spacing: 14
+        ) {
+
+
+            // Header
+
+            HStack {
+
+                Image(
+                    systemName:
+                        "scalemass.fill"
+                )
+                .foregroundColor(.blue)
+
+
+                Text("Weight Trend")
+                    .font(.headline)
+
+
+                Spacer()
+
+
+                if let latest {
+
+                    Text(
+                        String(
+                            format:
+                                "%.1f kg",
+                            latest
+                        )
+                    )
+                    .font(.subheadline)
+                    .fontWeight(.bold)
+                    .foregroundColor(.blue)
+                }
+            }
+
+
+            // Week / Month / Year
+
+            Picker(
+                "Period",
+                selection:
+                    $selectedPeriod
+            ) {
+
+                ForEach(
+                    TrendPeriod.allCases,
+                    id: \.self
+                ) { period in
+
+                    Text(
+                        period.rawValue
+                    )
+                    .tag(period)
+                }
+            }
+
+            .pickerStyle(
+                .segmented
+            )
+
+            .onChange(
+                of: selectedPeriod
+            ) { _ in
+
+                selectedPoint = nil
+                showEntries = false
+            }
+
+
+            if chartPoints.isEmpty {
+
+                VStack(spacing: 8) {
+
+                    Image(
+                        systemName:
+                            "scalemass"
+                    )
+                    .font(
+                        .system(size: 36)
+                    )
+                    .foregroundColor(
+                        .secondary
+                            .opacity(0.4)
+                    )
+
+
+                    Text(
+                        "No weight logged this \(selectedPeriod.rawValue.lowercased())"
+                    )
+                    .font(.subheadline)
+                    .foregroundColor(
+                        .secondary
+                    )
+                }
+
+                .frame(
+                    maxWidth:
+                        .infinity
+                )
+
+                .padding(
+                    .vertical,
+                    20
+                )
+
+
+            } else {
+
+
+                // MARK: Trend Chart
+
+                GeometryReader { geo in
+
+                    let width =
+                        geo.size.width
+
+                    let height =
+                        geo.size.height
+
+                    let range =
+                        max(
+                            maxW - minW,
+                            0.5
+                        )
+
+
+                    ZStack {
+
+
+                        // Grid
+
+                        ForEach(
+                            0..<4
+                        ) { i in
+
+                            Path { p in
+
+                                let y =
+                                    height
+                                    *
+                                    CGFloat(i)
+                                    /
+                                    3
+
+                                p.move(
+                                    to:
+                                        CGPoint(
+                                            x: 0,
+                                            y: y
+                                        )
+                                )
+
+                                p.addLine(
+                                    to:
+                                        CGPoint(
+                                            x: width,
+                                            y: y
+                                        )
+                                )
+                            }
+
+                            .stroke(
+                                Color.secondary
+                                    .opacity(0.1),
+                                lineWidth: 1
+                            )
+                        }
+
+
+                        // Area
+
+                        if chartPoints.count > 1 {
+
+                            Path { p in
+
+                                for (
+                                    index,
+                                    point
+                                )
+                                in chartPoints.enumerated() {
+
+
+                                    let x =
+                                        width
+                                        *
+                                        CGFloat(index)
+                                        /
+                                        CGFloat(
+                                            chartPoints.count - 1
+                                        )
+
+
+                                    let normal =
+                                        (
+                                            point.weight -
+                                            minW
+                                        )
+                                        /
+                                        range
+
+
+                                    let y =
+                                        height
+                                        *
+                                        CGFloat(
+                                            1 - normal
+                                        )
+
+
+                                    if index == 0 {
+
+                                        p.move(
+                                            to:
+                                                CGPoint(
+                                                    x: x,
+                                                    y: y
+                                                )
+                                        )
+
+                                    } else {
+
+                                        p.addLine(
+                                            to:
+                                                CGPoint(
+                                                    x: x,
+                                                    y: y
+                                                )
+                                        )
+                                    }
+                                }
+
+
+                                p.addLine(
+                                    to:
+                                        CGPoint(
+                                            x: width,
+                                            y: height
+                                        )
+                                )
+
+
+                                p.addLine(
+                                    to:
+                                        CGPoint(
+                                            x: 0,
+                                            y: height
+                                        )
+                                )
+
+
+                                p.closeSubpath()
+                            }
+
+                            .fill(
+
+                                LinearGradient(
+
+                                    colors: [
+                                        Color.blue.opacity(
+                                            0.15
+                                        ),
+
+                                        Color.blue.opacity(
+                                            0
+                                        )
+                                    ],
+
+                                    startPoint: .top,
+
+                                    endPoint: .bottom
+                                )
+                            )
+
+
+                            // Line
+
+                            Path { p in
+
+                                for (
+                                    index,
+                                    point
+                                )
+                                in chartPoints.enumerated() {
+
+
+                                    let x =
+                                        width
+                                        *
+                                        CGFloat(index)
+                                        /
+                                        CGFloat(
+                                            chartPoints.count - 1
+                                        )
+
+
+                                    let normal =
+                                        (
+                                            point.weight -
+                                            minW
+                                        )
+                                        /
+                                        range
+
+
+                                    let y =
+                                        height
+                                        *
+                                        CGFloat(
+                                            1 - normal
+                                        )
+
+
+                                    if index == 0 {
+
+                                        p.move(
+                                            to:
+                                                CGPoint(
+                                                    x: x,
+                                                    y: y
+                                                )
+                                        )
+
+                                    } else {
+
+                                        p.addLine(
+                                            to:
+                                                CGPoint(
+                                                    x: x,
+                                                    y: y
+                                                )
+                                        )
+                                    }
+                                }
+                            }
+
+                            .stroke(
+                                Color.blue,
+
+                                style:
+                                    StrokeStyle(
+                                        lineWidth: 2.5,
+                                        lineCap: .round,
+                                        lineJoin: .round
+                                    )
+                            )
+                        }
+
+
+                        // MARK: CLICKABLE DOTS
+
+                        ForEach(
+                            Array(chartPoints.enumerated()),
+                            id: \.element.id
+                        ) { item in
+
+                            let index = item.offset
+                            let point = item.element
+
+
+                            let x =
+                                chartPoints.count == 1
+                                ?
+                                width / 2
+                                :
+                                width
+                                *
+                                CGFloat(index)
+                                /
+                                CGFloat(
+                                    chartPoints.count - 1
+                                )
+
+
+                            let normal =
+                                (
+                                    point.weight -
+                                    minW
+                                )
+                                /
+                                range
+
+
+                            let y =
+                                height
+                                *
+                                CGFloat(
+                                    1 - normal
+                                )
+
+
+                            Button {
+
+                                selectedPoint =
+                                    point
+
+                            } label: {
+
+                                ZStack {
+
+                                    // Big invisible tap area
+                                    Circle()
+                                        .fill(
+                                            Color.blue
+                                                .opacity(
+                                                    0.001
+                                                )
+                                        )
+                                        .frame(
+                                            width: 34,
+                                            height: 34
+                                        )
+
+
+                                    Circle()
+                                        .fill(
+                                            Color.blue
+                                        )
+                                        .frame(
+                                            width:
+                                                selectedPoint?.id
+                                                ==
+                                                point.id
+                                                ?
+                                                12
+                                                :
+                                                8,
+
+                                            height:
+                                                selectedPoint?.id
+                                                ==
+                                                point.id
+                                                ?
+                                                12
+                                                :
+                                                8
+                                        )
+                                }
+                            }
+
+                            .buttonStyle(
+                                .plain
+                            )
+
+                            .position(
+                                x: x,
+                                y: y
+                            )
+
+
+                            if selectedPeriod
+                                ==
+                                .week {
+
+                                Text(
+                                    String(
+                                        format:
+                                            "%.1f",
+                                        point.weight
+                                    )
+                                )
+
+                                .font(
+                                    .system(
+                                        size: 8
+                                    )
+                                )
+
+                                .foregroundColor(
+                                    .blue
+                                )
+
+                                .position(
+                                    x: x,
+
+                                    y:
+                                        max(
+                                            y - 12,
+                                            8
+                                        )
+                                )
+                            }
+                        }
+
+
+                        Text(
+                            String(
+                                format:
+                                    "%.1f",
+                                maxW
+                            )
+                        )
+                        .font(
+                            .system(size: 8)
+                        )
+                        .foregroundColor(
+                            .secondary
+                        )
+                        .position(
+                            x: 20,
+                            y: 8
+                        )
+
+
+                        Text(
+                            String(
+                                format:
+                                    "%.1f",
+                                minW
+                            )
+                        )
+                        .font(
+                            .system(size: 8)
+                        )
+                        .foregroundColor(
+                            .secondary
+                        )
+                        .position(
+                            x: 20,
+                            y: height - 4
+                        )
+                    }
+                }
+
+                .frame(
+                    height: 130
+                )
+
+
+                // MARK: Selected Point Details
+
+                if let point =
+                    selectedPoint {
+
+                    VStack(
+                        alignment: .leading,
+                        spacing: 8
+                    ) {
+
+                        HStack {
+
+                            Image(
+                                systemName:
+                                    "hand.tap.fill"
+                            )
+                            .foregroundColor(
+                                .blue
+                            )
+
+
+                            Text(
+                                pointTitle(
+                                    point
+                                )
+                            )
+                            .font(
+                                .subheadline
+                            )
+                            .fontWeight(
+                                .semibold
+                            )
+
+
+                            Spacer()
+
+
+                            Button {
+
+                                selectedPoint =
+                                    nil
+
+                            } label: {
+
+                                Image(
+                                    systemName:
+                                        "xmark.circle.fill"
+                                )
+                                .foregroundColor(
+                                    .secondary
+                                )
+                            }
+                        }
+
+
+                        HStack {
+
+                            VStack(
+                                alignment:
+                                    .leading,
+                                spacing: 2
+                            ) {
+
+                                Text(
+                                    point.logs.count == 1
+                                    ?
+                                    "Weight"
+                                    :
+                                    "Average weight"
+                                )
+                                .font(
+                                    .caption2
+                                )
+                                .foregroundColor(
+                                    .secondary
+                                )
+
+
+                                Text(
+                                    String(
+                                        format:
+                                            "%.1f kg",
+                                        point.weight
+                                    )
+                                )
+                                .font(
+                                    .title3
+                                )
+                                .fontWeight(
+                                    .bold
+                                )
+                                .foregroundColor(
+                                    .blue
+                                )
+                            }
+
+
+                            Spacer()
+
+
+                            Text(
+                                "\(point.logs.count) entr\(point.logs.count == 1 ? "y" : "ies")"
+                            )
+                            .font(.caption)
+                            .foregroundColor(
+                                .secondary
+                            )
+                        }
+
+
+                        // Original entries represented by point
+
+                        ForEach(
+                            point.logs
+                        ) { log in
+
+                            Button {
+
+                                selectedLog =
+                                    log
+
+                            } label: {
+
+                                HStack(
+                                    spacing: 10
+                                ) {
+
+                                    Image(
+                                        systemName:
+                                            "scalemass"
+                                    )
+                                    .foregroundColor(
+                                        .blue
+                                    )
+
+
+                                    VStack(
+                                        alignment:
+                                            .leading,
+                                        spacing: 2
+                                    ) {
+
+                                        Text(
+                                            fullDateTime(
+                                                log.date
+                                            )
+                                        )
+                                        .font(
+                                            .caption
+                                        )
+                                        .foregroundColor(
+                                            .primary
+                                        )
+
+
+                                        if !log.note
+                                            .trimmingCharacters(
+                                                in:
+                                                    .whitespacesAndNewlines
+                                            )
+                                            .isEmpty {
+
+                                            Text(
+                                                log.note
+                                            )
+                                            .font(
+                                                .caption2
+                                            )
+                                            .foregroundColor(
+                                                .secondary
+                                            )
+                                            .lineLimit(1)
+                                        }
+                                    }
+
+
+                                    Spacer()
+
+
+                                    Text(
+                                        String(
+                                            format:
+                                                "%.1f kg",
+                                            log.weight
+                                        )
+                                    )
+                                    .font(
+                                        .subheadline
+                                    )
+                                    .fontWeight(
+                                        .semibold
+                                    )
+                                    .foregroundColor(
+                                        .blue
+                                    )
+
+
+                                    Image(
+                                        systemName:
+                                            "chevron.right"
+                                    )
+                                    .font(
+                                        .caption2
+                                    )
+                                    .foregroundColor(
+                                        .secondary
+                                    )
+                                }
+
+                                .padding(8)
+
+                                .background(
+                                    Color(
+                                        .systemBackground
+                                    )
+                                )
+
+                                .cornerRadius(8)
+                            }
+
+                            .buttonStyle(
+                                .plain
+                            )
+                        }
+                    }
+
+                    .padding(12)
+
+                    .background(
+                        Color.blue.opacity(
+                            0.06
+                        )
+                    )
+
+                    .cornerRadius(12)
+                }
+
+
+                // MARK: Stats
+
+                HStack(
+                    spacing: 0
+                ) {
+
+                    VStack(
+                        spacing: 4
+                    ) {
+
+                        Text("Avg")
+                            .font(
+                                .caption2
+                            )
+                            .foregroundColor(
+                                .secondary
+                            )
+
+
+                        if let avg =
+                            periodAvg {
+
+                            Text(
+                                String(
+                                    format:
+                                        "%.1f",
+                                    avg
+                                )
+                            )
+                            .font(
+                                .subheadline
+                            )
+                            .fontWeight(
+                                .bold
+                            )
+                            .foregroundColor(
+                                .blue
+                            )
+
+
+                            Text("kg")
+                                .font(
+                                    .caption2
+                                )
+                                .foregroundColor(
+                                    .secondary
+                                )
+
+                        } else {
+
+                            Text("—")
+                        }
+                    }
+
+                    .frame(
+                        maxWidth:
+                            .infinity
+                    )
+
+
+                    Divider()
+                        .frame(
+                            height: 36
+                        )
+
+
+                    VStack(
+                        spacing: 4
+                    ) {
+
+                        Text("Change")
+                            .font(
+                                .caption2
+                            )
+                            .foregroundColor(
+                                .secondary
+                            )
+
+
+                        if let change =
+                            periodChange {
+
+                            HStack(
+                                spacing: 2
+                            ) {
+
+                                Image(
+                                    systemName:
+                                        change < 0
+                                        ?
+                                        "arrow.down"
+                                        :
+                                        change > 0
+                                        ?
+                                        "arrow.up"
+                                        :
+                                        "minus"
+                                )
+                                .font(
+                                    .caption2
+                                )
+
+
+                                Text(
+                                    String(
+                                        format:
+                                            "%.1f",
+                                        abs(
+                                            change
+                                        )
+                                    )
+                                )
+                                .font(
+                                    .subheadline
+                                )
+                                .fontWeight(
+                                    .bold
+                                )
+                            }
+
+                            .foregroundColor(
+                                change < 0
+                                ?
+                                .green
+                                :
+                                change > 0
+                                ?
+                                .red
+                                :
+                                .secondary
+                            )
+
+
+                            Text(
+                                "kg this \(selectedPeriod.rawValue.lowercased())"
+                            )
+                            .font(
+                                .caption2
+                            )
+                            .foregroundColor(
+                                .secondary
+                            )
+
+                        } else {
+
+                            Text("—")
+                        }
+                    }
+
+                    .frame(
+                        maxWidth:
+                            .infinity
+                    )
+
+
+                    Divider()
+                        .frame(
+                            height: 36
+                        )
+
+
+                    VStack(
+                        spacing: 4
+                    ) {
+
+                        Text(
+                            compareLabel
+                        )
+                        .font(
+                            .caption2
+                        )
+                        .foregroundColor(
+                            .secondary
+                        )
+
+
+                        if let diff =
+                            periodDiff {
+
+                            HStack(
+                                spacing: 2
+                            ) {
+
+                                Image(
+                                    systemName:
+                                        diff < 0
+                                        ?
+                                        "arrow.down"
+                                        :
+                                        diff > 0
+                                        ?
+                                        "arrow.up"
+                                        :
+                                        "minus"
+                                )
+                                .font(
+                                    .caption2
+                                )
+
+
+                                Text(
+                                    String(
+                                        format:
+                                            "%.1f",
+                                        abs(
+                                            diff
+                                        )
+                                    )
+                                )
+                                .font(
+                                    .subheadline
+                                )
+                                .fontWeight(
+                                    .bold
+                                )
+                            }
+
+                            .foregroundColor(
+                                diff < 0
+                                ?
+                                .green
+                                :
+                                diff > 0
+                                ?
+                                .red
+                                :
+                                .secondary
+                            )
+
+
+                            Text(
+                                diff < 0
+                                ?
+                                "lighter ✓"
+                                :
+                                diff > 0
+                                ?
+                                "heavier"
+                                :
+                                "same"
+                            )
+                            .font(
+                                .caption2
+                            )
+
+                        } else {
+
+                            Text("—")
+                                .font(
+                                    .subheadline
+                                )
+
+
+                            Text(
+                                "no prior data"
+                            )
+                            .font(
+                                .caption2
+                            )
+                            .foregroundColor(
+                                .secondary
+                            )
+                        }
+                    }
+
+                    .frame(
+                        maxWidth:
+                            .infinity
+                    )
+                }
+
+                .padding(
+                    .vertical,
+                    8
+                )
+
+                .background(
+                    Color(
+                        .systemGray6
+                    )
+                    .opacity(
+                        0.6
+                    )
+                )
+
+                .cornerRadius(12)
+
+
+                Divider()
+
+
+                // MARK: Expandable Entries
+
+                Button {
+
+                    withAnimation {
+                        showEntries.toggle()
+                    }
+
+                } label: {
+
+                    HStack {
+
+                        Image(
+                            systemName:
+                                "list.bullet.rectangle"
+                        )
+                        .foregroundColor(
+                            .blue
+                        )
+
+
+                        VStack(
+                            alignment:
+                                .leading,
+                            spacing: 2
+                        ) {
+
+                            Text(
+                                entriesTitle
+                            )
+                            .font(
+                                .subheadline
+                            )
+                            .fontWeight(
+                                .semibold
+                            )
+                            .foregroundColor(
+                                .primary
+                            )
+
+
+                            Text(
+                                "\(periodLogs.count) saved entr\(periodLogs.count == 1 ? "y" : "ies")"
+                            )
+                            .font(
+                                .caption2
+                            )
+                            .foregroundColor(
+                                .secondary
+                            )
+                        }
+
+
+                        Spacer()
+
+
+                        Image(
+                            systemName:
+                                showEntries
+                                ?
+                                "chevron.up"
+                                :
+                                "chevron.down"
+                        )
+                        .font(
+                            .caption
+                        )
+                        .foregroundColor(
+                            .secondary
+                        )
+                    }
+                }
+
+                .buttonStyle(
+                    .plain
+                )
+
+
+                if showEntries {
+
+                    VStack(
+                        spacing: 8
+                    ) {
+
+                        ForEach(
+                            periodLogs.sorted {
+                                $0.date >
+                                $1.date
+                            }
+                        ) { log in
+
+                            Button {
+
+                                selectedLog =
+                                    log
+
+                            } label: {
+
+                                HStack(
+                                    spacing: 10
+                                ) {
+
+                                    VStack(
+                                        alignment:
+                                            .leading,
+                                        spacing: 3
+                                    ) {
+
+                                        Text(
+                                            fullDateTime(
+                                                log.date
+                                            )
+                                        )
+                                        .font(
+                                            .subheadline
+                                        )
+                                        .foregroundColor(
+                                            .primary
+                                        )
+
+
+                                        if !log.note
+                                            .trimmingCharacters(
+                                                in:
+                                                    .whitespacesAndNewlines
+                                            )
+                                            .isEmpty {
+
+                                            Text(
+                                                log.note
+                                            )
+                                            .font(
+                                                .caption2
+                                            )
+                                            .foregroundColor(
+                                                .secondary
+                                            )
+                                            .lineLimit(1)
+                                        }
+                                    }
+
+
+                                    Spacer()
+
+
+                                    Text(
+                                        String(
+                                            format:
+                                                "%.1f kg",
+                                            log.weight
+                                        )
+                                    )
+                                    .font(
+                                        .subheadline
+                                    )
+                                    .fontWeight(
+                                        .bold
+                                    )
+                                    .foregroundColor(
+                                        .blue
+                                    )
+
+
+                                    Image(
+                                        systemName:
+                                            "pencil"
+                                    )
+                                    .font(
+                                        .caption
+                                    )
+                                    .foregroundColor(
+                                        .secondary
+                                    )
+
+
+                                    Image(
+                                        systemName:
+                                            "chevron.right"
+                                    )
+                                    .font(
+                                        .caption2
+                                    )
+                                    .foregroundColor(
+                                        .secondary
+                                    )
+                                }
+
+                                .padding(10)
+
+                                .background(
+                                    Color(
+                                        .systemBackground
+                                    )
+                                )
+
+                                .cornerRadius(10)
+                            }
+
+                            .buttonStyle(
+                                .plain
+                            )
+
+                            .swipeActions(
+                                edge:
+                                    .trailing
+                            ) {
+
+                                Button(
+                                    role:
+                                        .destructive
+                                ) {
+
+                                    WeightLog
+                                        .delete(
+                                            log
+                                        )
+
+                                    refreshAfterChange()
+
+                                } label: {
+
+                                    Label(
+                                        "Delete",
+                                        systemImage:
+                                            "trash"
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    .id(
+                        refreshID
+                    )
+                }
+            }
+        }
+
+        .padding()
+
+        .background(
+            .regularMaterial
+        )
+
+        .cornerRadius(16)
+
+
+        // MARK: Edit / Delete Sheet
+
+        .sheet(
+            item:
+                $selectedLog
+        ) { log in
+
+            WeightLogDetailView(
+
+                log: log,
+
+                onUpdate: {
+                    updated in
+
+                    WeightLog
+                        .update(
+                            updated
+                        )
+
+                    refreshAfterChange()
+                },
+
+                onDelete: {
+
+                    WeightLog
+                        .delete(
+                            log
+                        )
+
+                    refreshAfterChange()
+                }
+            )
+        }
+    }
+
+
+    // MARK: Refresh
+
+    func refreshAfterChange() {
+
+        selectedPoint = nil
+
+        refreshID =
+            UUID()
+    }
+
+
+    // MARK: Point Title
+
+    func pointTitle(
+        _ point: TrendPoint
+    ) -> String {
+
+        let formatter =
+            DateFormatter()
+
+
+        switch selectedPeriod {
+
+        case .week,
+             .month:
+
+            formatter.dateFormat =
+                "EEEE, MMM d"
+
+            return formatter.string(
+                from:
+                    point.date
+            )
+
+
+        case .year:
+
+            formatter.dateFormat =
+                "MMM d"
+
+
+            let end =
+                Calendar.current.date(
+                    byAdding: .day,
+                    value: 6,
+                    to: point.date
+                )
+                ??
+                point.date
+
+
+            return
+                "Week of \(formatter.string(from: point.date)) – \(formatter.string(from: end))"
+        }
+    }
+
+
+    func fullDateTime(
+        _ date: Date
+    ) -> String {
+
+        let formatter =
+            DateFormatter()
+
+        formatter.dateFormat =
+            "MMM d, yyyy · h:mm a"
+
+        return formatter.string(
+            from: date
+        )
+    }
 }
 
 #Preview { ContentView() }
