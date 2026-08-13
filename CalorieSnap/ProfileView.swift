@@ -3,6 +3,12 @@ import Combine
 
 // MARK: - User Profile
 
+// Minimal decodable mirror of WeightLog — reads same UserDefaults key as ContentView
+private struct WeightLogEntry: Codable {
+    var weight: Double
+    var date: Date
+}
+
 class UserProfile: ObservableObject {
     @AppStorage("dailyCalorieGoal") var dailyCalorieGoal: Int = 1683
     @AppStorage("weeklyWeightGoal") var weeklyWeightGoal: Double = 0.5
@@ -10,6 +16,15 @@ class UserProfile: ObservableObject {
     @AppStorage("userHeight") var userHeight: Double = 160
     @AppStorage("userAge") var userAge: Int = 25
     @AppStorage("userName") var userName: String = "Kelly"
+
+    // Reads the latest weight from the same store as the dashboard weight logs
+    var latestLoggedWeight: Double? {
+        guard let data = UserDefaults.standard.data(forKey: "weightLogs"),
+              let logs = try? JSONDecoder().decode([WeightLogEntry].self, from: data),
+              let latest = logs.sorted(by: { $0.date > $1.date }).first
+        else { return nil }
+        return latest.weight
+    }
 }
 
 // MARK: - Wish Models
@@ -233,6 +248,33 @@ struct ProfileView: View {
 
     enum ProfileTab { case wishes; case achievements }
 
+    // Live weight — uses latest dashboard log, falls back to stored value
+    var currentWeight: Double {
+        if let logged = UserProfile().latestLoggedWeight { return logged }
+        return userWeight
+    }
+    var bmi: Double {
+        let h = userHeight / 100
+        guard h > 0 else { return 0 }
+        return currentWeight / (h * h)
+    }
+    var bmiCategory: (label: String, color: Color) {
+        switch bmi {
+        case ..<18.5: return ("Underweight", .blue)
+        case 18.5..<25: return ("Normal ✓", .green)
+        case 25..<30: return ("Overweight", .orange)
+        default: return ("Obese", .red)
+        }
+    }
+    var bmiAdvice: String {
+        switch bmi {
+        case ..<18.5: return "Below healthy range · target 18.5–24.9"
+        case 18.5..<25: return "Healthy BMI range · keep it up!"
+        case 25..<30: return "Above healthy range · target 18.5–24.9"
+        default: return "Well above healthy range · target 18.5–24.9"
+        }
+    }
+
     var pendingWishes: [WishItem] {
         var base = wishStore.thisYearWishes.filter { !$0.isDone }
         if let cat = selectedWishCategory { base = base.filter { $0.category == cat } }
@@ -264,9 +306,12 @@ struct ProfileView: View {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(userName).font(.title2).fontWeight(.bold)
                                 HStack(spacing: 12) {
-                                    Label("\(userAge) yrs", systemImage: "person.fill").font(.caption).foregroundColor(.secondary)
-                                    Label(String(format: "%.0f cm", userHeight), systemImage: "ruler").font(.caption).foregroundColor(.secondary)
-                                    Label(String(format: "%.1f kg", userWeight), systemImage: "scalemass").font(.caption).foregroundColor(.secondary)
+                                    Label("\(userAge) yrs", systemImage: "person.fill")
+                                        .font(.caption).foregroundColor(.secondary)
+                                    Label(String(format: "%.0f cm", userHeight), systemImage: "ruler")
+                                        .font(.caption).foregroundColor(.secondary)
+                                    Label(String(format: "%.1f kg", currentWeight), systemImage: "scalemass")
+                                        .font(.caption).foregroundColor(.secondary)
                                 }
                             }
                             Spacer()
@@ -274,7 +319,10 @@ struct ProfileView: View {
                                 Image(systemName: "pencil.circle.fill").font(.title2).foregroundColor(.green)
                             }
                         }
+
                         Divider()
+
+                        // Kcal + weight goal row
                         HStack(spacing: 0) {
                             VStack(spacing: 4) {
                                 Text("\(dailyCalorieGoal)").font(.title3).fontWeight(.bold).foregroundColor(.green)
@@ -282,9 +330,88 @@ struct ProfileView: View {
                             }.frame(maxWidth: .infinity)
                             Divider().frame(height: 36)
                             VStack(spacing: 4) {
-                                Text(String(format: "%.1f kg/wk", weeklyWeightGoal)).font(.title3).fontWeight(.bold).foregroundColor(.blue)
+                                Text(String(format: "%.1f kg/wk", weeklyWeightGoal))
+                                    .font(.title3).fontWeight(.bold).foregroundColor(.blue)
                                 Text("weight goal").font(.caption2).foregroundColor(.secondary)
                             }.frame(maxWidth: .infinity)
+                        }
+
+                        Divider()
+
+                        // BMI section
+                        VStack(spacing: 10) {
+                            HStack(alignment: .center, spacing: 12) {
+                                // BMI number + category badge
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack(spacing: 8) {
+                                        Text("BMI").font(.caption).foregroundColor(.secondary)
+                                        Text(String(format: "%.1f", bmi))
+                                            .font(.title2).fontWeight(.bold)
+                                    }
+                                    Text(bmiCategory.label)
+                                        .font(.caption).fontWeight(.semibold).foregroundColor(.white)
+                                        .padding(.horizontal, 10).padding(.vertical, 4)
+                                        .background(bmiCategory.color).cornerRadius(8)
+                                    Text(bmiAdvice).font(.caption2).foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                // Live weight pill
+                                VStack(spacing: 2) {
+                                    if UserProfile().latestLoggedWeight != nil {
+                                        Text("From logs").font(.system(size: 8)).foregroundColor(.blue)
+                                    }
+                                    Text(String(format: "%.1f kg", currentWeight))
+                                        .font(.subheadline).fontWeight(.bold).foregroundColor(.blue)
+                                    Text("current").font(.system(size: 8)).foregroundColor(.secondary)
+                                }
+                                .padding(8).background(Color.blue.opacity(0.08)).cornerRadius(10)
+                            }
+
+                            // BMI gauge bar
+                            GeometryReader { geo in
+                                let w = geo.size.width
+                                let minBMI: Double = 10; let maxBMI: Double = 40
+                                let clampedBMI = min(max(bmi, minBMI), maxBMI)
+                                let pos = CGFloat((clampedBMI - minBMI) / (maxBMI - minBMI)) * w
+                                let underEnd   = CGFloat((18.5 - minBMI) / (maxBMI - minBMI)) * w
+                                let normalEnd  = CGFloat((25.0 - minBMI) / (maxBMI - minBMI)) * w
+                                let overEnd    = CGFloat((30.0 - minBMI) / (maxBMI - minBMI)) * w
+
+                                ZStack(alignment: .leading) {
+                                    // Coloured segments
+                                    HStack(spacing: 0) {
+                                        Rectangle().fill(Color.blue.opacity(0.3)).frame(width: underEnd, height: 10)
+                                        Rectangle().fill(Color.green.opacity(0.3)).frame(width: normalEnd - underEnd, height: 10)
+                                        Rectangle().fill(Color.orange.opacity(0.3)).frame(width: overEnd - normalEnd, height: 10)
+                                        Rectangle().fill(Color.red.opacity(0.3)).frame(maxWidth: .infinity).frame(height: 10)
+                                    }.cornerRadius(5)
+
+                                    // Current BMI indicator
+                                    ZStack {
+                                        Circle().fill(Color.white).frame(width: 18, height: 18)
+                                            .shadow(color: .black.opacity(0.2), radius: 2)
+                                        Circle().fill(bmiCategory.color).frame(width: 12, height: 12)
+                                    }.offset(x: max(0, min(pos - 9, w - 18)))
+                                }
+                            }.frame(height: 18)
+
+                            // BMI scale labels
+                            HStack(spacing: 0) {
+                                BMIScaleBlock(label: "Under", range: "<18.5", color: .blue)
+                                BMIScaleBlock(label: "Normal", range: "18.5–25", color: .green)
+                                BMIScaleBlock(label: "Over", range: "25–30", color: .orange)
+                                BMIScaleBlock(label: "Obese", range: ">30", color: .red)
+                            }
+
+                            // Healthy target weight range
+                            let minHealthy = 18.5 * (userHeight / 100) * (userHeight / 100)
+                            let maxHealthy = 24.9 * (userHeight / 100) * (userHeight / 100)
+                            HStack(spacing: 4) {
+                                Image(systemName: "target").font(.caption2).foregroundColor(.green)
+                                Text(String(format: "Healthy weight for %.0f cm: %.1f–%.1f kg",
+                                            userHeight, minHealthy, maxHealthy))
+                                    .font(.caption2).foregroundColor(.secondary)
+                            }
                         }
                     }
                     .padding().background(.regularMaterial).cornerRadius(16).padding(.horizontal)
@@ -516,9 +643,6 @@ struct WishDetailView: View {
     @State private var showAddProgress = false
     @State private var progressNote = ""
     @State private var isCompletion = false
-    @State private var isPartial = false      // new: partial achieved
-    @State private var showEditWish = false
-    @State private var showDeleteConfirm = false
 
     var wishBinding: WishItem? { store.wishes.first { $0.id == wish.id } }
 
@@ -541,15 +665,9 @@ struct WishDetailView: View {
                                     .font(.caption).foregroundColor(.green)
                             } else {
                                 let count = wishBinding?.progressEntries.count ?? 0
-                                let partialCount = wishBinding?.progressEntries.filter { !$0.isCompletion }.count ?? 0
                                 if count > 0 {
-                                    if partialCount > 0 {
-                                        Label("\(partialCount) partial · \(count) total", systemImage: "circle.lefthalf.filled")
-                                            .font(.caption).foregroundColor(.orange)
-                                    } else {
-                                        Label("\(count) update\(count == 1 ? "" : "s")", systemImage: "pencil.circle")
-                                            .font(.caption).foregroundColor(.orange)
-                                    }
+                                    Label("\(count) progress update\(count == 1 ? "" : "s")", systemImage: "pencil.circle")
+                                        .font(.caption).foregroundColor(.orange)
                                 }
                             }
                         }
@@ -568,15 +686,13 @@ struct WishDetailView: View {
                             ForEach(entries) { entry in
                                 HStack(alignment: .top, spacing: 12) {
                                     VStack(spacing: 4) {
-                                        Image(systemName: entry.isCompletion
-                                              ? "checkmark.circle.fill"
-                                              : entry.note.isEmpty ? "pencil.circle.fill" : "circle.lefthalf.filled")
+                                        Image(systemName: entry.isCompletion ? "checkmark.circle.fill" : "pencil.circle.fill")
                                             .foregroundColor(entry.isCompletion ? .green : .orange).font(.title3)
                                         Rectangle().fill(Color.secondary.opacity(0.2)).frame(width: 1.5).frame(minHeight: 20)
                                     }
                                     VStack(alignment: .leading, spacing: 4) {
                                         HStack {
-                                            Text(entry.isCompletion ? "Fully Achieved ✅" : "Partial Progress 🔸")
+                                            Text(entry.isCompletion ? "Completed" : "Progress")
                                                 .font(.caption).fontWeight(.semibold)
                                                 .foregroundColor(entry.isCompletion ? .green : .orange)
                                             Spacer()
@@ -590,143 +706,62 @@ struct WishDetailView: View {
                         .padding().background(.regularMaterial).cornerRadius(16).padding(.horizontal)
                     }
 
-                    // Action buttons
+                    // Add progress / complete buttons
                     if !wish.isDone {
                         VStack(spacing: 10) {
-
-                            // Progress note
-                            Button(action: { isCompletion = false; isPartial = false; showAddProgress = true }) {
+                            Button(action: { isCompletion = false; showAddProgress = true }) {
                                 HStack {
-                                    Image(systemName: "pencil.circle.fill").foregroundColor(.blue)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Add Progress Note").fontWeight(.semibold).foregroundColor(.blue)
-                                        Text("Track what you've done so far").font(.caption2).foregroundColor(.secondary)
-                                    }
-                                    Spacer()
+                                    Image(systemName: "pencil.circle.fill").foregroundColor(.orange)
+                                    Text("Add Progress Note").fontWeight(.semibold).foregroundColor(.orange)
                                 }
                                 .frame(maxWidth: .infinity).padding(14)
-                                .background(Color.blue.opacity(0.08)).cornerRadius(12)
-                                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.blue.opacity(0.25), lineWidth: 1))
-                            }
-
-                            // Partial achieved
-                            Button(action: { isCompletion = false; isPartial = true; showAddProgress = true }) {
-                                HStack {
-                                    Image(systemName: "circle.lefthalf.filled").foregroundColor(.orange)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Partially Achieved 🔸").fontWeight(.semibold).foregroundColor(.orange)
-                                        Text("Done some of it — log what you achieved").font(.caption2).foregroundColor(.secondary)
-                                    }
-                                    Spacer()
-                                }
-                                .frame(maxWidth: .infinity).padding(14)
-                                .background(Color.orange.opacity(0.08)).cornerRadius(12)
+                                .background(Color.orange.opacity(0.1)).cornerRadius(12)
                                 .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.orange.opacity(0.3), lineWidth: 1))
                             }
-
-                            // Fully achieved
-                            Button(action: { isCompletion = true; isPartial = false; showAddProgress = true }) {
+                            Button(action: { isCompletion = true; showAddProgress = true }) {
                                 HStack {
                                     Image(systemName: "checkmark.circle.fill").foregroundColor(.white)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Mark Fully Achieved! 🌟").fontWeight(.semibold).foregroundColor(.white)
-                                        Text("Completed everything").font(.caption2).foregroundColor(.white.opacity(0.8))
-                                    }
-                                    Spacer()
+                                    Text("Mark as Achieved! 🌟").fontWeight(.semibold).foregroundColor(.white)
                                 }
                                 .frame(maxWidth: .infinity).padding(14)
                                 .background(Color.green).cornerRadius(12)
                             }
                         }.padding(.horizontal)
                     } else {
-                        VStack(spacing: 10) {
-                            // Add more notes even when done
-                            Button(action: { isCompletion = true; isPartial = false; showAddProgress = true }) {
-                                HStack {
-                                    Image(systemName: "note.text.badge.plus").foregroundColor(.green)
-                                    Text("Add Completion Note").fontWeight(.semibold).foregroundColor(.green)
-                                }
-                                .frame(maxWidth: .infinity).padding(14)
-                                .background(Color.green.opacity(0.08)).cornerRadius(12)
-                                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.green.opacity(0.3), lineWidth: 1))
-                            }
-                            Button(action: { store.toggle(wish) }) {
-                                Label("Undo — Mark as Not Done", systemImage: "arrow.uturn.backward")
-                                    .font(.caption).foregroundColor(.secondary)
-                            }
-                        }.padding(.horizontal)
+                        Button(action: { store.toggle(wish) }) {
+                            Label("Mark as Not Done", systemImage: "arrow.uturn.backward")
+                                .font(.caption).foregroundColor(.secondary)
+                        }
                     }
                 }
                 .padding(.vertical, 16)
             }
             .navigationTitle("Wish Detail").navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) { Button("Done") { dismiss() } }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    HStack(spacing: 12) {
-                        // Edit button
-                        Button(action: { showEditWish = true }) {
-                            Image(systemName: "pencil.circle.fill").foregroundColor(.blue)
-                        }
-                        // Delete button
-                        Button(action: { showDeleteConfirm = true }) {
-                            Image(systemName: "trash.circle.fill").foregroundColor(.red)
-                        }
-                    }
-                }
-            }
-            .sheet(isPresented: $showEditWish) {
-                AddEditWishView(store: store, existing: wish)
-            }
-            .confirmationDialog("Delete this wish?", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
-                Button("Delete", role: .destructive) {
-                    store.wishes.removeAll { $0.id == wish.id }
-                    dismiss()
-                }
-                Button("Cancel", role: .cancel) { }
-            } message: {
-                Text("\"\(wish.title)\" and all its progress notes will be deleted.")
-            }
+            .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("Done") { dismiss() } } }
             .sheet(isPresented: $showAddProgress) {
                 NavigationView {
                     Form {
-                        Section(isCompletion
-                            ? "How did you fully achieve this? 🎉"
-                            : isPartial
-                            ? "What part did you achieve? 🔸"
-                            : "What progress did you make?") {
+                        Section(isCompletion ? "How did you achieve this? 🎉" : "What progress did you make?") {
                             TextField(isCompletion
                                 ? "e.g. Went to Paris and Rome in June!"
-                                : isPartial
-                                ? "e.g. Visited 1 out of 2 places — went to Japan!"
                                 : "e.g. Booked flights to Japan, researching hotels...",
                                       text: $progressNote, axis: .vertical)
                                 .lineLimit(4...8)
                         }
-                        Section {
-                            if isCompletion {
-                                Label("This will mark the wish as fully achieved ✅", systemImage: "checkmark.circle.fill")
+                        if isCompletion {
+                            Section {
+                                Label("This will mark the wish as fully achieved", systemImage: "checkmark.circle.fill")
                                     .font(.caption).foregroundColor(.green)
-                            } else if isPartial {
-                                Label("This records a partial achievement — wish stays open", systemImage: "circle.lefthalf.filled")
-                                    .font(.caption).foregroundColor(.orange)
-                            } else {
-                                Label("This adds a progress note — wish stays open", systemImage: "pencil.circle")
-                                    .font(.caption).foregroundColor(.blue)
                             }
                         }
                     }
-                    .navigationTitle(isCompletion ? "Mark Achieved" : isPartial ? "Partial Achievement" : "Add Progress")
-                    .navigationBarTitleDisplayMode(.inline)
+                    .navigationTitle(isCompletion ? "Mark Achieved" : "Add Progress").navigationBarTitleDisplayMode(.inline)
                     .toolbar {
-                        ToolbarItem(placement: .navigationBarLeading) {
-                            Button("Cancel") { showAddProgress = false; progressNote = "" }
-                        }
+                        ToolbarItem(placement: .navigationBarLeading) { Button("Cancel") { showAddProgress = false; progressNote = "" } }
                         ToolbarItem(placement: .navigationBarTrailing) {
-                            Button(isCompletion ? "Achieve! 🌟" : isPartial ? "Save 🔸" : "Add Note") {
+                            Button(isCompletion ? "Achieve! 🌟" : "Add Note") {
                                 guard !progressNote.isEmpty else { return }
-                                store.addProgressEntry(to: wish.id, note: progressNote,
-                                                       isCompletion: isCompletion)
+                                store.addProgressEntry(to: wish.id, note: progressNote, isCompletion: isCompletion)
                                 progressNote = ""; showAddProgress = false
                             }.fontWeight(.bold).disabled(progressNote.isEmpty)
                         }
@@ -834,6 +869,19 @@ struct AchievementDetailView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - BMI Scale Block
+
+struct BMIScaleBlock: View {
+    let label: String; let range: String; let color: Color
+    var body: some View {
+        VStack(spacing: 2) {
+            Rectangle().fill(color.opacity(0.25)).frame(height: 4).cornerRadius(2)
+            Text(label).font(.system(size: 9)).foregroundColor(color).fontWeight(.semibold)
+            Text(range).font(.system(size: 8)).foregroundColor(.secondary)
+        }.frame(maxWidth: .infinity)
     }
 }
 
@@ -1084,7 +1132,15 @@ struct EditProfileView: View {
                     TextField("Name", text: $userName)
                     HStack { Text("Age").foregroundColor(.secondary); Spacer(); TextField("25", text: $ageStr).keyboardType(.numberPad).multilineTextAlignment(.trailing).frame(width: 80) }
                     HStack { Text("Height").foregroundColor(.secondary); Spacer(); TextField("160", text: $heightStr).keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 80); Text("cm").foregroundColor(.secondary) }
-                    HStack { Text("Weight").foregroundColor(.secondary); Spacer(); TextField("71", text: $weightStr).keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 80); Text("kg").foregroundColor(.secondary) }
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Weight (fallback)").foregroundColor(.secondary)
+                            Text("Auto-updated from weight logs").font(.caption2).foregroundColor(.blue)
+                        }
+                        Spacer()
+                        TextField("71", text: $weightStr).keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 80)
+                        Text("kg").foregroundColor(.secondary)
+                    }
                 }
                 Section("Goals") {
                     HStack { Text("Daily Calories").foregroundColor(.secondary); Spacer(); TextField("1683", text: $calorieStr).keyboardType(.numberPad).multilineTextAlignment(.trailing).frame(width: 80); Text("kcal").foregroundColor(.secondary) }
