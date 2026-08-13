@@ -553,6 +553,9 @@ struct CalendarView: View {
                                 if event.isToday { celebratingEvent = event }
                                 else { editingCountdown = event }
                             },
+                            onDelete: { event in
+                                eventStore.deleteEvent(event)
+                            },
                             onAdd: { showAddCountdown = true }
                         ).padding(.horizontal)
                     }
@@ -963,6 +966,7 @@ struct AddEditCountdownView: View {
 struct CountdownBar: View {
     let events: [CalendarEvent]
     let onTap: (CalendarEvent) -> Void
+    let onDelete: (CalendarEvent) -> Void
     let onAdd: () -> Void
 
     var sortedEvents: [CalendarEvent] {
@@ -978,6 +982,7 @@ struct CountdownBar: View {
                 Image(systemName: "timer").foregroundColor(.blue)
                 Text("Countdowns").font(.headline)
                 Spacer()
+                Text("Tap·Hold to edit").font(.caption2).foregroundColor(.secondary)
                 Button(action: onAdd) {
                     Image(systemName: "plus.circle.fill").foregroundColor(.blue).font(.title3)
                 }
@@ -985,7 +990,11 @@ struct CountdownBar: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
                     ForEach(sortedEvents) { event in
-                        CountdownChip(event: event).onTapGesture { onTap(event) }
+                        CountdownChip(
+                            event: event,
+                            onLongPress: { onTap(event) },
+                            onDelete: { onDelete(event) }
+                        )
                     }
                 }.padding(.vertical, 4)
             }
@@ -996,6 +1005,8 @@ struct CountdownBar: View {
 
 struct CountdownChip: View {
     let event: CalendarEvent
+    var onLongPress: (() -> Void)? = nil
+    var onDelete: (() -> Void)? = nil
     @State private var showingCountdown = true
 
     var yearsElapsed: Int {
@@ -1047,7 +1058,6 @@ struct CountdownChip: View {
 
     var body: some View {
         VStack(spacing: 5) {
-            // Emoji — clean, no overlay
             Text(event.emoji)
                 .font(.system(size: 30))
                 .frame(width: 54, height: 54)
@@ -1059,20 +1069,17 @@ struct CountdownChip: View {
                         : nil
                 )
 
-            // Title
             Text(event.title)
                 .font(.system(size: 10)).fontWeight(.medium)
                 .lineLimit(1)
                 .frame(width: 72)
                 .multilineTextAlignment(.center)
 
-            // Count label
             Text(topLabel)
                 .font(.system(size: 11, weight: .bold))
                 .foregroundColor(chipColor)
                 .animation(.spring(response: 0.3), value: showingCountdown)
 
-            // Mode row — tap hint
             HStack(spacing: 3) {
                 Text(modeIcon).font(.system(size: 9))
                 Text(showingCountdown ? "to next" : "since")
@@ -1085,9 +1092,19 @@ struct CountdownChip: View {
         .background(Color(.systemBackground))
         .cornerRadius(14)
         .shadow(color: .black.opacity(0.07), radius: 5, x: 0, y: 2)
+        // Single tap = toggle countdown/elapsed
         .onTapGesture {
             withAnimation(.spring(response: 0.35)) {
                 showingCountdown.toggle()
+            }
+        }
+        // Long press = edit/delete context menu
+        .contextMenu {
+            Button(action: { onLongPress?() }) {
+                Label("Edit", systemImage: "pencil")
+            }
+            Button(role: .destructive, action: { onDelete?() }) {
+                Label("Delete", systemImage: "trash")
             }
         }
     }
