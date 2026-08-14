@@ -103,7 +103,7 @@ struct ContentView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.bottom, 46)
+            .padding(.bottom, 60)
 
             HStack(spacing: 0) {
                 CustomTabItem(icon: "flame.fill",        label: "Today",    tag: 0, selected: $selectedTab)
@@ -112,7 +112,7 @@ struct ContentView: View {
                 CustomTabItem(icon: "dollarsign.circle", label: "Finance",  tag: 3, selected: $selectedTab)
                 CustomTabItem(icon: "person.circle",     label: "Profile",  tag: 4, selected: $selectedTab)
             }
-            .padding(.horizontal, 2).padding(.vertical, 4)
+            .padding(.horizontal, 4).padding(.vertical, 8)
             .background(.regularMaterial)
             .overlay(Divider(), alignment: .top)
         }
@@ -125,16 +125,16 @@ struct CustomTabItem: View {
     var isSelected: Bool { selected == tag }
     var body: some View {
         Button(action: { selected = tag }) {
-            VStack(spacing: 2) {
+            VStack(spacing: 4) {
                 Image(systemName: icon)
-                    .font(.system(size: 17))
-                    .foregroundColor(isSelected ? .green : .secondary)
+                    .font(.system(size: 24, weight: .regular))
+                    .foregroundColor(isSelected ? .green : Color(.systemGray))
                 Text(label)
-                    .font(.system(size: 8))
-                    .foregroundColor(isSelected ? .green : .secondary)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(isSelected ? .green : Color(.systemGray))
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 3)
+            .padding(.vertical, 8)
         }
     }
 }
