@@ -227,9 +227,13 @@ class StockPriceFetcher: ObservableObject {
 
     // Fetch price for a single symbol from Yahoo Finance (no API key needed)
     func fetchPrice(symbol: String, completion: @escaping (Double?) -> Void) {
+        fetchPriceAndPrevClose(symbol: symbol) { price, _ in completion(price) }
+    }
+
+    func fetchPriceAndPrevClose(symbol: String, completion: @escaping (Double?, Double?) -> Void) {
         let sym = symbol.uppercased()
         let urlString = "https://query1.finance.yahoo.com/v8/finance/chart/\(sym)?interval=1m&range=1d"
-        guard let url = URL(string: urlString) else { completion(nil); return }
+        guard let url = URL(string: urlString) else { completion(nil, nil); return }
 
         DispatchQueue.main.async { self.fetchingSymbols.insert(sym) }
 
@@ -242,7 +246,7 @@ class StockPriceFetcher: ObservableObject {
 
             guard let data = data, error == nil else {
                 DispatchQueue.main.async { self.fetchErrors[sym] = "Network error" }
-                completion(nil); return
+                completion(nil, nil); return
             }
 
             do {
@@ -251,29 +255,28 @@ class StockPriceFetcher: ObservableObject {
                    let result = (chart["result"] as? [[String: Any]])?.first,
                    let meta = result["meta"] as? [String: Any] {
 
-                    // Try regularMarketPrice first, then previousClose
                     let price = meta["regularMarketPrice"] as? Double
                         ?? meta["chartPreviousClose"] as? Double
+                    // previousClose = prior trading day's close
+                    let prevClose = meta["chartPreviousClose"] as? Double
+                        ?? meta["previousClose"] as? Double
 
                     DispatchQueue.main.async {
                         self.lastFetchTime = Date()
                         self.fetchErrors.removeValue(forKey: sym)
                     }
-                    completion(price)
+                    completion(price, prevClose)
                 } else {
-                    DispatchQueue.main.async {
-                        self.fetchErrors[sym] = "Invalid response"
-                    }
-                    completion(nil)
+                    DispatchQueue.main.async { self.fetchErrors[sym] = "Invalid response" }
+                    completion(nil, nil)
                 }
             } catch {
                 DispatchQueue.main.async { self.fetchErrors[sym] = "Parse error" }
-                completion(nil)
+                completion(nil, nil)
             }
         }.resume()
     }
 
-    // Fetch prices for all symbols
     func fetchAllPrices(symbols: [String], completion: @escaping ([String: Double]) -> Void) {
         var results: [String: Double] = [:]
         let group = DispatchGroup()
@@ -314,6 +317,9 @@ class FinanceStore: ObservableObject {
     @Published var fridayClosePrices: [String: Double] = [:] {
         didSet { saveFridayPrices() }
     }
+    @Published var previousClosePrices: [String: Double] = [:] {
+        didSet { savePrevClosePrices() }
+    }
 
     let fetcher = StockPriceFetcher()
     private var priceTimer: Timer?
@@ -322,7 +328,7 @@ class FinanceStore: ObservableObject {
     init() {
         load(); loadBudgets(); loadOverallBudget()
         loadStockTx(); loadPrices(); loadPriceHistory()
-        loadFridayPrices(); loadCDs()
+        loadFridayPrices(); loadPrevClosePrices(); loadCDs()
         rebuildHoldings()
         loadStockSnapshot()
         schedulePriceTimer()
@@ -351,7 +357,20 @@ class FinanceStore: ObservableObject {
         guard !symbols.isEmpty else { return }
         isFetchingPrices = true
 
-        fetcher.fetchAllPrices(symbols: symbols) { [weak self] results in
+        var results: [String: Double] = [:]
+        var prevCloseResults: [String: Double] = [:]
+        let group = DispatchGroup()
+
+        for symbol in symbols {
+            group.enter()
+            fetcher.fetchPriceAndPrevClose(symbol: symbol) { [weak self] price, prevClose in
+                if let p = price { results[symbol.uppercased()] = p }
+                if let pc = prevClose { prevCloseResults[symbol.uppercased()] = pc }
+                group.leave()
+            }
+        }
+
+        group.notify(queue: .main) { [weak self] in
             guard let self = self else { return }
             self.isFetchingPrices = false
             self.lastPriceFetchTime = Date()
@@ -370,6 +389,12 @@ class FinanceStore: ObservableObject {
 
                 self.saveFridayCloseIfNeeded(symbol: sym, price: price)
             }
+
+            // Store previous close prices for today's change calculation
+            for (sym, prevClose) in prevCloseResults {
+                self.previousClosePrices[sym] = prevClose
+            }
+
             self.rebuildHoldings()
         }
     }
@@ -530,7 +555,44 @@ class FinanceStore: ObservableObject {
 
     func removeMaturedCDs() { cdAccounts.removeAll { $0.isMatured } }
 
-    // MARK: - Market status
+    // Symbols that have been fully sold (net shares ≤ 0) — for archive view
+    var archivedSymbols: [ArchivedStock] {
+        var symbolData: [String: (buyShares: Double, buyCost: Double, sellShares: Double, sellProceeds: Double)] = [:]
+        let sorted = stockTransactions.sorted { $0.date < $1.date }
+        for tx in sorted {
+            let sym = tx.symbol.uppercased()
+            var d = symbolData[sym] ?? (buyShares: 0, buyCost: 0, sellShares: 0, sellProceeds: 0)
+            switch tx.type {
+            case .buy:
+                d.buyShares += tx.amountInvested / tx.price
+                d.buyCost += tx.amountInvested
+            case .sell:
+                d.sellShares += tx.amountInvested / tx.price
+                d.sellProceeds += tx.amountInvested
+            }
+            symbolData[sym] = d
+        }
+        // Only return symbols where net shares ≤ 0 (fully sold)
+        return symbolData.compactMap { sym, d -> ArchivedStock? in
+            guard d.buyShares > 0 && (d.buyShares - d.sellShares) < 0.0001 else { return nil }
+            let avgBuy = d.buyCost / d.buyShares
+            let avgSell = d.sellShares > 0 ? d.sellProceeds / d.sellShares : 0
+            let realizedGL = d.sellProceeds - d.buyCost
+            let currentPrice = manualPrices[sym] ?? avgSell
+            return ArchivedStock(
+                symbol: sym, totalBuyShares: d.buyShares, totalBuyCost: d.buyCost,
+                totalSellProceeds: d.sellProceeds, avgBuyPrice: avgBuy, avgSellPrice: avgSell,
+                realizedGainLoss: realizedGL, currentMarketPrice: currentPrice,
+                priceHistory: priceHistories[sym] ?? [],
+                transactions: stockTransactions.filter { $0.symbol.uppercased() == sym }
+            )
+        }.sorted { $0.symbol < $1.symbol }
+    }
+
+    // Total realized gain from fully-sold positions
+    var totalRealizedGainLoss: Double {
+        archivedSymbols.reduce(0) { $0 + $1.realizedGainLoss }
+    }
 
     var isWeekend: Bool {
         let w = Calendar.current.component(.weekday, from: Date())
@@ -542,7 +604,7 @@ class FinanceStore: ObservableObject {
         return h >= 9 && h < 16
     }
     var marketStatusText: String {
-        if isWeekend { return "Weekend — vs last Friday close" }
+        if isWeekend { return "Weekend — market closed" }
         return isMarketOpen ? "Market open — live prices" : "After hours"
     }
     var marketStatusColor: Color {
@@ -584,12 +646,36 @@ class FinanceStore: ObservableObject {
         return stockHoldings.allSatisfy { fridayClosePrices[$0.symbol] != nil }
     }
 
+    // Previous close portfolio value — uses Yahoo's chartPreviousClose for each symbol
+    var previousClosePortfolioValue: Double {
+        var total: Double = 0
+        for holding in stockHoldings {
+            if let pc = previousClosePrices[holding.symbol] {
+                total += pc * holding.shares
+            } else if let fp = fridayClosePrices[holding.symbol] {
+                // Fall back to stored Friday close
+                total += fp * holding.shares
+            } else {
+                total += holding.totalCost
+            }
+        }
+        return total
+    }
+
+    var hasPreviousCloseData: Bool {
+        guard !stockHoldings.isEmpty else { return false }
+        return stockHoldings.allSatisfy {
+            previousClosePrices[$0.symbol] != nil || fridayClosePrices[$0.symbol] != nil
+        }
+    }
+
     var todayStockGainLoss: Double {
-        isWeekend ? totalStockValue - lastFridayPortfolioValue
-                  : totalStockValue - previousDayStockValue
+        // Always use actual previous close from Yahoo — works correctly Mon-Fri
+        let base = previousClosePortfolioValue
+        return base > 0 ? totalStockValue - base : totalStockValue - previousDayStockValue
     }
     var todayStockGainLossPercent: Double {
-        let base = isWeekend ? lastFridayPortfolioValue : previousDayStockValue
+        let base = previousClosePortfolioValue > 0 ? previousClosePortfolioValue : previousDayStockValue
         return base > 0 ? (todayStockGainLoss / base) * 100 : 0
     }
 
@@ -648,6 +734,14 @@ class FinanceStore: ObservableObject {
         guard let d = UserDefaults.standard.data(forKey: "fridayClosePrices"),
               let decoded = try? JSONDecoder().decode([String: Double].self, from: d) else { return }
         fridayClosePrices = decoded
+    }
+    func savePrevClosePrices() {
+        if let d = try? JSONEncoder().encode(previousClosePrices) { UserDefaults.standard.set(d, forKey: "previousClosePrices") }
+    }
+    func loadPrevClosePrices() {
+        guard let d = UserDefaults.standard.data(forKey: "previousClosePrices"),
+              let decoded = try? JSONDecoder().decode([String: Double].self, from: d) else { return }
+        previousClosePrices = decoded
     }
     func saveCDs() {
         if let d = try? JSONEncoder().encode(cdAccounts) { UserDefaults.standard.set(d, forKey: "cdAccounts") }
@@ -1573,6 +1667,8 @@ struct StocksTab: View {
     @State private var editingStock: StockHolding? = nil
     @State private var detailStock: StockHolding? = nil
     @State private var stockSearchText = ""
+    @State private var showArchive = false
+    @State private var detailArchived: ArchivedStock? = nil
 
     var filteredHoldings: [StockHolding] {
         let query = stockSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1738,13 +1834,8 @@ struct StocksTab: View {
 
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(
-                            store.isWeekend
-                            ? "vs Last Friday Close"
-                            : "Today's Change"
-                        )
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                        Text(store.isWeekend ? "Weekend" : "Today's Change")
+                            .font(.caption).foregroundColor(.secondary)
 
                         Text(
                             (store.todayStockGainLoss >= 0 ? "+" : "")
@@ -1975,6 +2066,57 @@ struct StocksTab: View {
                 .background(.regularMaterial)
                 .cornerRadius(16)
             }
+
+            // Archive — fully sold positions
+            if !store.archivedSymbols.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    Button(action: { withAnimation { showArchive.toggle() } }) {
+                        HStack {
+                            Image(systemName: "archivebox.fill").foregroundColor(.purple)
+                            Text("Sold Positions (\(store.archivedSymbols.count))")
+                                .font(.headline)
+                            Spacer()
+                            VStack(alignment: .trailing, spacing: 2) {
+                                Text((store.totalRealizedGainLoss >= 0 ? "+" : "") + String(format: "$%.2f", store.totalRealizedGainLoss))
+                                    .font(.subheadline).fontWeight(.bold)
+                                    .foregroundColor(store.totalRealizedGainLoss >= 0 ? .green : .red)
+                                Text("realized").font(.caption2).foregroundColor(.secondary)
+                            }
+                            Image(systemName: showArchive ? "chevron.up" : "chevron.down")
+                                .font(.caption).foregroundColor(.secondary)
+                        }
+                    }
+
+                    if showArchive {
+                        Divider()
+                        // Realized gain summary
+                        HStack(spacing: 0) {
+                            VStack(spacing: 4) {
+                                Text("Realized P&L").font(.caption2).foregroundColor(.secondary)
+                                Text((store.totalRealizedGainLoss >= 0 ? "+" : "") + String(format: "$%.2f", store.totalRealizedGainLoss))
+                                    .font(.title3).fontWeight(.bold)
+                                    .foregroundColor(store.totalRealizedGainLoss >= 0 ? .green : .red)
+                            }.frame(maxWidth: .infinity)
+                            Divider().frame(height: 36)
+                            VStack(spacing: 4) {
+                                Text("Positions").font(.caption2).foregroundColor(.secondary)
+                                Text("\(store.archivedSymbols.count)").font(.title3).fontWeight(.bold)
+                            }.frame(maxWidth: .infinity)
+                        }
+                        .padding(.vertical, 8)
+                        .background(Color(.systemGray6).opacity(0.6))
+                        .cornerRadius(10)
+
+                        ForEach(store.archivedSymbols) { archived in
+                            ArchivedStockRow(archived: archived)
+                                .onTapGesture { detailArchived = archived }
+                        }
+                    }
+                }
+                .padding()
+                .background(.regularMaterial)
+                .cornerRadius(16)
+            }
         }
         .sheet(isPresented: $showAddStock) {
             AddStockTransactionView(store: store)
@@ -1990,6 +2132,9 @@ struct StocksTab: View {
                 stock: stock,
                 store: store
             )
+        }
+        .sheet(item: $detailArchived) { archived in
+            ArchivedStockDetailView(archived: archived, store: store)
         }
     }
 }
@@ -2250,14 +2395,37 @@ struct StockDetailView: View {
                                     .font(.subheadline).fontWeight(.bold).foregroundColor(stock.gainLoss >= 0 ? .green : .red)
                             }
                         }
-                        if let fp = store.fridayClosePrices[stock.symbol] {
+                        if let pc = store.previousClosePrices[stock.symbol] {
+                            Divider()
+                            let todayGL = stock.currentPrice - pc
+                            let todayGLPct = pc > 0 ? (todayGL / pc) * 100 : 0
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Prev Close").font(.caption).foregroundColor(.secondary)
+                                    Text(String(format: "$%.2f", pc)).font(.subheadline).fontWeight(.semibold)
+                                }
+                                Spacer()
+                                VStack(alignment: .trailing, spacing: 2) {
+                                    Text("Today's Change").font(.caption).foregroundColor(.secondary)
+                                    HStack(spacing: 4) {
+                                        Text((todayGL >= 0 ? "+" : "") + String(format: "$%.2f", todayGL))
+                                            .font(.subheadline).fontWeight(.bold)
+                                            .foregroundColor(todayGL >= 0 ? .green : .red)
+                                        Text(String(format: "(%.2f%%)", todayGLPct))
+                                            .font(.caption2)
+                                            .foregroundColor(todayGL >= 0 ? .green : .red)
+                                    }
+                                }
+                            }
+                        } else if let fp = store.fridayClosePrices[stock.symbol] {
                             Divider()
                             HStack {
-                                Text("Friday Close").font(.caption).foregroundColor(.secondary); Spacer()
+                                Text("Last Friday Close").font(.caption).foregroundColor(.secondary)
+                                Spacer()
                                 Text(String(format: "$%.2f", fp)).font(.subheadline).fontWeight(.semibold)
-                                let weekendGL = stock.totalValue - (fp * stock.shares)
-                                Text((weekendGL >= 0 ? " +" : " ") + String(format: "$%.2f", weekendGL))
-                                    .font(.caption).fontWeight(.medium).foregroundColor(weekendGL >= 0 ? .green : .red)
+                                let weekGL = stock.totalValue - (fp * stock.shares)
+                                Text((weekGL >= 0 ? "+" : "") + String(format: "$%.2f", weekGL))
+                                    .font(.caption).fontWeight(.medium).foregroundColor(weekGL >= 0 ? .green : .red)
                             }
                         }
                     }.padding().background(.regularMaterial).cornerRadius(16).padding(.horizontal)
@@ -2291,16 +2459,60 @@ struct StockDetailView: View {
     }
 }
 
+// MARK: - Archived Stock Model
+
+struct ArchivedStock: Identifiable {
+    var id: String { symbol }
+    var symbol: String
+    var totalBuyShares: Double
+    var totalBuyCost: Double
+    var totalSellProceeds: Double
+    var avgBuyPrice: Double
+    var avgSellPrice: Double
+    var realizedGainLoss: Double
+    var currentMarketPrice: Double
+    var priceHistory: [PricePoint]
+    var transactions: [StockTransaction]
+
+    var realizedGainLossPercent: Double {
+        totalBuyCost > 0 ? (realizedGainLoss / totalBuyCost) * 100 : 0
+    }
+    // If you had held — what would it be worth now
+    var hypotheticalValue: Double { totalBuyShares * currentMarketPrice }
+    var hypotheticalGainLoss: Double { hypotheticalValue - totalBuyCost }
+    var hypotheticalGainLossPercent: Double {
+        totalBuyCost > 0 ? (hypotheticalGainLoss / totalBuyCost) * 100 : 0
+    }
+    // Did selling early cost or save money vs holding?
+    var sellVsHoldDiff: Double { totalSellProceeds - hypotheticalValue }
+}
+
 // MARK: - Stock Chart View
 
 struct StockChartView: View {
     let stock: StockHolding; let transactions: [StockTransaction]; let priceHistory: [PricePoint]
+
     var chartData: [PricePoint] {
         var pts = priceHistory
-        if pts.isEmpty {
+
+        // Always inject transaction price points so buy/sell markers have matching dates
+        for tx in transactions {
+            // Only add if no point within 1 minute of the transaction
+            let hasNearby = pts.contains { abs($0.date.timeIntervalSince(tx.date)) < 60 }
+            if !hasNearby {
+                pts.append(PricePoint(date: tx.date, price: tx.price))
+            }
+        }
+
+        // Always include a current price point
+        if !pts.isEmpty {
+            pts.append(PricePoint(date: Date(), price: stock.currentPrice))
+        } else {
+            // Fallback: build from transactions only
             pts = transactions.map { PricePoint(date: $0.date, price: $0.price) }
             pts.append(PricePoint(date: Date(), price: stock.currentPrice))
         }
+
         return pts.sorted { $0.date < $1.date }
     }
     var minPrice: Double { (chartData.map { $0.price }.min() ?? 0) * 0.995 }
@@ -2343,16 +2555,53 @@ struct StockChartView: View {
                                 if i == 0 { p.move(to: CGPoint(x: x, y: y)) } else { p.addLine(to: CGPoint(x: x, y: y)) }
                             }
                         }.stroke(stock.gainLoss >= 0 ? Color.green : Color.red, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                        // Buy markers — use tx.price for Y (actual buy price on chart scale)
                         ForEach(transactions.filter { $0.type == .buy }) { tx in
-                            if let nearest = chartData.enumerated().min(by: { abs($0.element.date.timeIntervalSince(tx.date)) < abs($1.element.date.timeIntervalSince(tx.date)) }) {
-                                ZStack { Circle().fill(Color.white).frame(width: 16, height: 16); Circle().fill(Color.green).frame(width: 10, height: 10) }
-                                    .position(x: xPos(idx: nearest.offset, w: w), y: yPos(price: tx.price, h: h))
+                            let xIdx = chartData.enumerated().min(by: {
+                                abs($0.element.date.timeIntervalSince(tx.date)) < abs($1.element.date.timeIntervalSince(tx.date))
+                            })
+                            if let nearest = xIdx {
+                                let xPos = self.xPos(idx: nearest.offset, w: w)
+                                let yPos = self.yPos(price: tx.price, h: h)
+                                ZStack {
+                                    Circle().fill(Color.white).frame(width: 18, height: 18)
+                                        .shadow(color: .black.opacity(0.15), radius: 2)
+                                    Circle().fill(Color.green).frame(width: 11, height: 11)
+                                }
+                                .position(x: xPos, y: yPos)
+
+                                // Price label above
+                                Text(String(format: "$%.2f", tx.price))
+                                    .font(.system(size: 8, weight: .medium))
+                                    .foregroundColor(.green)
+                                    .padding(.horizontal, 3).padding(.vertical, 1)
+                                    .background(Color(.systemBackground).opacity(0.85))
+                                    .cornerRadius(3)
+                                    .position(x: min(max(xPos, 24), w - 24), y: max(yPos - 16, 10))
                             }
                         }
+                        // Sell markers
                         ForEach(transactions.filter { $0.type == .sell }) { tx in
-                            if let nearest = chartData.enumerated().min(by: { abs($0.element.date.timeIntervalSince(tx.date)) < abs($1.element.date.timeIntervalSince(tx.date)) }) {
-                                ZStack { Circle().fill(Color.white).frame(width: 16, height: 16); Circle().fill(Color.red).frame(width: 10, height: 10) }
-                                    .position(x: xPos(idx: nearest.offset, w: w), y: yPos(price: tx.price, h: h))
+                            let xIdx = chartData.enumerated().min(by: {
+                                abs($0.element.date.timeIntervalSince(tx.date)) < abs($1.element.date.timeIntervalSince(tx.date))
+                            })
+                            if let nearest = xIdx {
+                                let xPos = self.xPos(idx: nearest.offset, w: w)
+                                let yPos = self.yPos(price: tx.price, h: h)
+                                ZStack {
+                                    Circle().fill(Color.white).frame(width: 18, height: 18)
+                                        .shadow(color: .black.opacity(0.15), radius: 2)
+                                    Circle().fill(Color.red).frame(width: 11, height: 11)
+                                }
+                                .position(x: xPos, y: yPos)
+
+                                Text(String(format: "$%.2f", tx.price))
+                                    .font(.system(size: 8, weight: .medium))
+                                    .foregroundColor(.red)
+                                    .padding(.horizontal, 3).padding(.vertical, 1)
+                                    .background(Color(.systemBackground).opacity(0.85))
+                                    .cornerRadius(3)
+                                    .position(x: min(max(xPos, 24), w - 24), y: max(yPos - 16, 10))
                             }
                         }
                         VStack {
@@ -2370,6 +2619,245 @@ struct StockChartView: View {
                 }
             }
         }.padding().background(.regularMaterial).cornerRadius(16)
+    }
+}
+
+// MARK: - Archived Stock Row
+
+struct ArchivedStockRow: View {
+    let archived: ArchivedStock
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(archived.symbol).font(.subheadline).fontWeight(.bold)
+                    Text("SOLD").font(.system(size: 9)).fontWeight(.semibold)
+                        .foregroundColor(.white).padding(.horizontal, 5).padding(.vertical, 2)
+                        .background(Color.purple).cornerRadius(4)
+                }
+                Text(String(format: "Bought $%.2f · Sold $%.2f avg", archived.avgBuyPrice, archived.avgSellPrice))
+                    .font(.caption2).foregroundColor(.secondary)
+            }
+            Spacer()
+            VStack(alignment: .trailing, spacing: 2) {
+                Text((archived.realizedGainLoss >= 0 ? "+" : "") + String(format: "$%.2f", archived.realizedGainLoss))
+                    .font(.subheadline).fontWeight(.bold)
+                    .foregroundColor(archived.realizedGainLoss >= 0 ? .green : .red)
+                Text(String(format: "%.1f%% realized", archived.realizedGainLossPercent))
+                    .font(.caption2).foregroundColor(archived.realizedGainLoss >= 0 ? .green : .red)
+                Text(String(format: "Now $%.2f", archived.currentMarketPrice))
+                    .font(.caption2).foregroundColor(.secondary)
+            }
+            Image(systemName: "chevron.right").font(.caption2).foregroundColor(.secondary.opacity(0.4))
+        }
+        .padding(12).background(Color(.systemBackground)).cornerRadius(12)
+        .shadow(color: .black.opacity(0.04), radius: 3, x: 0, y: 1)
+    }
+}
+
+// MARK: - Archived Stock Detail View
+
+struct ArchivedStockDetailView: View {
+    let archived: ArchivedStock
+    @ObservedObject var store: FinanceStore
+    @Environment(\.dismiss) var dismiss
+
+    var chartData: [PricePoint] {
+        var pts = archived.priceHistory
+        // Inject transaction points
+        for tx in archived.transactions {
+            let hasNearby = pts.contains { abs($0.date.timeIntervalSince(tx.date)) < 60 }
+            if !hasNearby { pts.append(PricePoint(date: tx.date, price: tx.price)) }
+        }
+        // Add current market price point
+        pts.append(PricePoint(date: Date(), price: archived.currentMarketPrice))
+        return pts.sorted { $0.date < $1.date }
+    }
+
+    var minP: Double { (chartData.map { $0.price }.min() ?? 0) * 0.995 }
+    var maxP: Double { (chartData.map { $0.price }.max() ?? 1) * 1.005 }
+    var priceRange: Double { max(maxP - minP, 0.01) }
+
+    func xPos(idx: Int, w: CGFloat) -> CGFloat {
+        guard chartData.count > 1 else { return w / 2 }
+        return w * CGFloat(idx) / CGFloat(chartData.count - 1)
+    }
+    func yPos(price: Double, h: CGFloat) -> CGFloat {
+        h * CGFloat(1 - (price - minP) / priceRange)
+    }
+
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                VStack(spacing: 16) {
+
+                    // Price chart
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("Price Chart").font(.headline)
+                            Spacer()
+                            VStack(alignment: .trailing, spacing: 2) {
+                                Text(String(format: "$%.2f", archived.currentMarketPrice))
+                                    .font(.title3).fontWeight(.bold).foregroundColor(.secondary)
+                                Text("Current market").font(.caption2).foregroundColor(.secondary)
+                            }
+                        }
+
+                        if chartData.count >= 2 {
+                            GeometryReader { geo in
+                                let w = geo.size.width; let h = geo.size.height
+                                ZStack {
+                                    ForEach(0..<5) { i in
+                                        Path { p in
+                                            let y = h * CGFloat(i) / 4
+                                            p.move(to: CGPoint(x: 0, y: y)); p.addLine(to: CGPoint(x: w, y: y))
+                                        }.stroke(Color.secondary.opacity(0.08), lineWidth: 1)
+                                    }
+                                    // Line
+                                    Path { p in
+                                        for (i, pt) in chartData.enumerated() {
+                                            let x = xPos(idx: i, w: w); let y = yPos(price: pt.price, h: h)
+                                            if i == 0 { p.move(to: CGPoint(x: x, y: y)) } else { p.addLine(to: CGPoint(x: x, y: y)) }
+                                        }
+                                    }.stroke(Color.purple, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+
+                                    // Sell markers (red)
+                                    ForEach(archived.transactions.filter { $0.type == .sell }) { tx in
+                                        if let nearest = chartData.enumerated().min(by: { abs($0.element.date.timeIntervalSince(tx.date)) < abs($1.element.date.timeIntervalSince(tx.date)) }) {
+                                            let xp = xPos(idx: nearest.offset, w: w)
+                                            let yp = yPos(price: tx.price, h: h)
+                                            ZStack {
+                                                Circle().fill(Color.white).frame(width: 18, height: 18).shadow(color: .black.opacity(0.15), radius: 2)
+                                                Circle().fill(Color.red).frame(width: 11, height: 11)
+                                            }.position(x: xp, y: yp)
+                                            Text(String(format: "$%.2f", tx.price)).font(.system(size: 8, weight: .medium))
+                                                .foregroundColor(.red).padding(.horizontal, 3).padding(.vertical, 1)
+                                                .background(Color(.systemBackground).opacity(0.9)).cornerRadius(3)
+                                                .position(x: min(max(xp, 24), w - 24), y: max(yp - 16, 10))
+                                        }
+                                    }
+                                    // Buy markers (green)
+                                    ForEach(archived.transactions.filter { $0.type == .buy }) { tx in
+                                        if let nearest = chartData.enumerated().min(by: { abs($0.element.date.timeIntervalSince(tx.date)) < abs($1.element.date.timeIntervalSince(tx.date)) }) {
+                                            let xp = xPos(idx: nearest.offset, w: w)
+                                            let yp = yPos(price: tx.price, h: h)
+                                            ZStack {
+                                                Circle().fill(Color.white).frame(width: 18, height: 18).shadow(color: .black.opacity(0.15), radius: 2)
+                                                Circle().fill(Color.green).frame(width: 11, height: 11)
+                                            }.position(x: xp, y: yp)
+                                            Text(String(format: "$%.2f", tx.price)).font(.system(size: 8, weight: .medium))
+                                                .foregroundColor(.green).padding(.horizontal, 3).padding(.vertical, 1)
+                                                .background(Color(.systemBackground).opacity(0.9)).cornerRadius(3)
+                                                .position(x: min(max(xp, 24), w - 24), y: max(yp - 16, 10))
+                                        }
+                                    }
+                                    // Current price marker (dashed line)
+                                    Path { p in
+                                        let y = yPos(price: archived.currentMarketPrice, h: h)
+                                        p.move(to: CGPoint(x: 0, y: y)); p.addLine(to: CGPoint(x: w, y: y))
+                                    }.stroke(Color.secondary.opacity(0.4), style: StrokeStyle(lineWidth: 1, dash: [4]))
+
+                                    VStack {
+                                        Text(String(format: "$%.2f", maxP)).font(.system(size: 8)).foregroundColor(.secondary)
+                                        Spacer()
+                                        Text(String(format: "$%.2f", minP)).font(.system(size: 8)).foregroundColor(.secondary)
+                                    }.frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                            }.frame(height: 200)
+
+                            HStack(spacing: 16) {
+                                HStack(spacing: 4) { Circle().fill(Color.green).frame(width: 8, height: 8); Text("Buy").font(.caption2).foregroundColor(.secondary) }
+                                HStack(spacing: 4) { Circle().fill(Color.red).frame(width: 8, height: 8); Text("Sell").font(.caption2).foregroundColor(.secondary) }
+                                Spacer()
+                                Text("- - -  Current price").font(.caption2).foregroundColor(.secondary)
+                            }
+                        } else {
+                            Text("Not enough price data to chart").font(.caption).foregroundColor(.secondary)
+                                .frame(maxWidth: .infinity).padding(.vertical, 20)
+                        }
+                    }.padding().background(.regularMaterial).cornerRadius(16).padding(.horizontal)
+
+                    // Summary card
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Trade Summary").font(.headline)
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Shares").font(.caption).foregroundColor(.secondary)
+                                Text(String(format: "%.4f", archived.totalBuyShares)).font(.title3).fontWeight(.bold)
+                            }
+                            Spacer()
+                            VStack(alignment: .center, spacing: 4) {
+                                Text("Avg Buy").font(.caption).foregroundColor(.secondary)
+                                Text(String(format: "$%.2f", archived.avgBuyPrice)).font(.title3).fontWeight(.bold)
+                            }
+                            Spacer()
+                            VStack(alignment: .trailing, spacing: 4) {
+                                Text("Avg Sell").font(.caption).foregroundColor(.secondary)
+                                Text(String(format: "$%.2f", archived.avgSellPrice)).font(.title3).fontWeight(.bold).foregroundColor(.red)
+                            }
+                        }
+                        Divider()
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Total Invested").font(.caption).foregroundColor(.secondary)
+                                Text(String(format: "$%.2f", archived.totalBuyCost)).font(.subheadline).fontWeight(.semibold)
+                            }
+                            Spacer()
+                            VStack(alignment: .trailing, spacing: 4) {
+                                Text("Realized Gain/Loss").font(.caption).foregroundColor(.secondary)
+                                Text((archived.realizedGainLoss >= 0 ? "+" : "") + String(format: "$%.2f (%.2f%%)", archived.realizedGainLoss, archived.realizedGainLossPercent))
+                                    .font(.subheadline).fontWeight(.bold)
+                                    .foregroundColor(archived.realizedGainLoss >= 0 ? .green : .red)
+                            }
+                        }
+                        Divider()
+                        // Sell vs hold comparison
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("If you had held until now…").font(.caption).foregroundColor(.secondary)
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Current Value").font(.caption2).foregroundColor(.secondary)
+                                    Text(String(format: "$%.2f", archived.hypotheticalValue))
+                                        .font(.subheadline).fontWeight(.semibold)
+                                }
+                                Spacer()
+                                VStack(alignment: .trailing, spacing: 4) {
+                                    Text("vs What You Got").font(.caption2).foregroundColor(.secondary)
+                                    let diff = archived.sellVsHoldDiff
+                                    Text((diff >= 0 ? "Sold +" : "Sold ") + String(format: "$%.2f", diff))
+                                        .font(.subheadline).fontWeight(.bold)
+                                        .foregroundColor(diff >= 0 ? .green : .red)
+                                }
+                            }
+                            Text(archived.sellVsHoldDiff >= 0
+                                 ? "✓ Good call — you sold higher than today's price"
+                                 : "📈 Stock went up after you sold — still holding would have been worth more")
+                                .font(.caption2).foregroundColor(.secondary)
+                        }
+                        .padding(10).background(Color(.systemGray6).opacity(0.5)).cornerRadius(10)
+                    }.padding().background(.regularMaterial).cornerRadius(16).padding(.horizontal)
+
+                    // Transaction history
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("\(archived.symbol) Transaction History").font(.headline)
+                        ForEach(archived.transactions.sorted { $0.date > $1.date }) { tx in
+                            StockTransactionRow(tx: tx, onDelete: { store.stockTransactions.removeAll { $0.id == tx.id } })
+                        }
+                    }.padding().background(.regularMaterial).cornerRadius(16).padding(.horizontal)
+                }
+                .padding(.vertical, 12)
+            }
+            .navigationTitle("\(archived.symbol) — Sold")
+            .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) { Button("Done") { dismiss() } }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: { store.fetchSinglePrice(symbol: archived.symbol) }) {
+                        Image(systemName: "arrow.clockwise").foregroundColor(.purple)
+                    }
+                }
+            }
+        }
     }
 }
 
