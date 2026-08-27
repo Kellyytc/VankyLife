@@ -1664,6 +1664,7 @@ struct StocksTab: View {
     @State private var showAddStock = false
     @State private var showingAllHoldings = false
     @State private var showingAllTx = false
+    @State private var editingTxInTab: StockTransaction? = nil
     @State private var editingStock: StockHolding? = nil
     @State private var detailStock: StockHolding? = nil
     @State private var stockSearchText = ""
@@ -2034,11 +2035,8 @@ struct StocksTab: View {
                     ForEach(displayedTx) { tx in
                         StockTransactionRow(
                             tx: tx,
-                            onDelete: {
-                                store.stockTransactions.removeAll {
-                                    $0.id == tx.id
-                                }
-                            }
+                            onDelete: { store.stockTransactions.removeAll { $0.id == tx.id } },
+                            onEdit: { editingTxInTab = tx }
                         )
                     }
 
@@ -2122,19 +2120,16 @@ struct StocksTab: View {
             AddStockTransactionView(store: store)
         }
         .sheet(item: $editingStock) { stock in
-            EditStockView(
-                stock: stock,
-                store: store
-            )
+            EditStockView(stock: stock, store: store)
         }
         .sheet(item: $detailStock) { stock in
-            StockDetailView(
-                stock: stock,
-                store: store
-            )
+            StockDetailView(stock: stock, store: store)
         }
         .sheet(item: $detailArchived) { archived in
             ArchivedStockDetailView(archived: archived, store: store)
+        }
+        .sheet(item: $editingTxInTab) { tx in
+            EditStockTransactionView(tx: tx, store: store)
         }
     }
 }
@@ -2256,76 +2251,171 @@ struct EditStockView: View {
     let stock: StockHolding
     @ObservedObject var store: FinanceStore
     @Environment(\.dismiss) var dismiss
-    @State private var newSymbol: String = ""
-    @State private var newPrice: String = ""
+    @State private var newSymbol: String
+    @State private var newPrice: String
     @State private var showSymbolWarning = false
+    @State private var editingTx: StockTransaction? = nil
+    @State private var showAddTx = false
 
     init(stock: StockHolding, store: FinanceStore) {
         self.stock = stock; self.store = store
         _newSymbol = State(initialValue: stock.symbol)
-        _newPrice = State(initialValue: String(format: "%.2f", stock.currentPrice))
+        _newPrice  = State(initialValue: String(format: "%.2f", stock.currentPrice))
     }
 
     var symbolChanged: Bool {
         newSymbol.uppercased().trimmingCharacters(in: .whitespaces) != stock.symbol
     }
+    var txHistory: [StockTransaction] {
+        store.transactionsFor(symbol: stock.symbol).sorted { $0.date > $1.date }
+    }
 
     var body: some View {
         NavigationView {
             Form {
+
+                // --- Ticker symbol ---
                 Section {
                     HStack {
-                        Text("Ticker Symbol").foregroundColor(.secondary); Spacer()
+                        Text("Ticker Symbol").foregroundColor(.secondary)
+                        Spacer()
                         TextField("e.g. AAPL", text: $newSymbol)
-                            .textInputAutocapitalization(.characters).multilineTextAlignment(.trailing).fontWeight(.semibold)
+                            .textInputAutocapitalization(.characters)
+                            .multilineTextAlignment(.trailing).fontWeight(.semibold)
                     }
                     if symbolChanged && !newSymbol.trimmingCharacters(in: .whitespaces).isEmpty {
-                        Label("Will rename \(stock.symbol) → \(newSymbol.uppercased())", systemImage: "arrow.triangle.2.circlepath")
+                        Label("Will rename \(stock.symbol) → \(newSymbol.uppercased())",
+                              systemImage: "arrow.triangle.2.circlepath")
                             .font(.caption).foregroundColor(.blue)
                     }
-                } header: { Text("Fix Ticker Symbol") }
+                } header: { Text("Ticker Symbol") }
 
-                Section("Position (auto-calculated)") {
-                    HStack { Text("Shares").foregroundColor(.secondary); Spacer(); Text(String(format: "%.4f", stock.shares)).fontWeight(.semibold) }
-                    HStack { Text("Avg Buy Price").foregroundColor(.secondary); Spacer(); Text(String(format: "$%.2f", stock.avgBuyPrice)).fontWeight(.semibold) }
-                    HStack { Text("Total Invested").foregroundColor(.secondary); Spacer(); Text(String(format: "$%.2f", stock.totalCost)).fontWeight(.semibold) }
-                }
-
+                // --- Current price ---
                 Section {
                     HStack {
                         Text("$").foregroundColor(.secondary).font(.title3)
-                        TextField("e.g. 213.00", text: $newPrice).keyboardType(.decimalPad).font(.title3)
-                        Button(action: { store.fetchSinglePrice(symbol: newSymbol.isEmpty ? stock.symbol : newSymbol) }) {
-                            Image(systemName: store.fetcher.fetchingSymbols.contains(stock.symbol) ? "hourglass" : "arrow.clockwise.circle.fill")
+                        TextField("e.g. 213.00", text: $newPrice)
+                            .keyboardType(.decimalPad).font(.title3)
+                        Button(action: {
+                            store.fetchSinglePrice(symbol: newSymbol.isEmpty ? stock.symbol : newSymbol)
+                        }) {
+                            Image(systemName: store.fetcher.fetchingSymbols.contains(stock.symbol)
+                                  ? "hourglass" : "arrow.clockwise.circle.fill")
                                 .foregroundColor(.green).font(.title3)
                         }
                     }
                     if !newPrice.isEmpty, let p = Double(newPrice) {
                         let val = p * stock.shares; let gl = val - stock.totalCost
                         let glPct = stock.totalCost > 0 ? (gl / stock.totalCost) * 100 : 0
-                        HStack { Text("New value").foregroundColor(.secondary); Spacer(); Text(String(format: "$%.2f", val)).fontWeight(.semibold) }
                         HStack {
-                            Text("Gain/Loss").foregroundColor(.secondary); Spacer()
+                            Text("Portfolio value").foregroundColor(.secondary)
+                            Spacer()
+                            Text(String(format: "$%.2f", val)).fontWeight(.semibold)
+                        }
+                        HStack {
+                            Text("Gain/Loss").foregroundColor(.secondary)
+                            Spacer()
                             Text((gl >= 0 ? "+" : "") + String(format: "$%.2f (%.2f%%)", gl, glPct))
                                 .fontWeight(.semibold).foregroundColor(gl >= 0 ? .green : .red)
                         }
                     }
-                    Text("Tap 🔄 to fetch live price from Yahoo Finance").font(.caption).foregroundColor(.secondary)
-                } header: { Text("Current Price") }
+                    Text("Tap 🔄 to fetch live price").font(.caption).foregroundColor(.secondary)
+                } header: { Text("Current Market Price") }
 
+                // --- Position summary ---
+                Section("Position (auto-calculated from transactions)") {
+                    HStack {
+                        Text("Shares held").foregroundColor(.secondary)
+                        Spacer()
+                        Text(String(format: "%.4f", stock.shares)).fontWeight(.semibold)
+                    }
+                    HStack {
+                        Text("Avg buy price").foregroundColor(.secondary)
+                        Spacer()
+                        Text(String(format: "$%.2f", stock.avgBuyPrice)).fontWeight(.semibold)
+                    }
+                    HStack {
+                        Text("Total invested").foregroundColor(.secondary)
+                        Spacer()
+                        Text(String(format: "$%.2f", stock.totalCost)).fontWeight(.semibold)
+                    }
+                }
 
-
+                // --- Transactions — tap to edit ---
                 Section {
-                    Text("ℹ️ To fix shares or buy price, delete the wrong transaction in the detail view and re-add it.")
-                        .font(.caption).foregroundColor(.secondary)
+                    if txHistory.isEmpty {
+                        Text("No transactions yet").font(.subheadline).foregroundColor(.secondary)
+                    } else {
+                        ForEach(txHistory) { tx in
+                            Button(action: { editingTx = tx }) {
+                                HStack(spacing: 12) {
+                                    // Type badge
+                                    VStack(spacing: 2) {
+                                        Image(systemName: tx.type == .buy ? "arrow.down.circle.fill" : "arrow.up.circle.fill")
+                                            .foregroundColor(tx.type == .buy ? .green : .red)
+                                            .font(.title3)
+                                        Text(tx.type.rawValue).font(.system(size: 9))
+                                            .foregroundColor(tx.type == .buy ? .green : .red)
+                                    }.frame(width: 36)
+
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        HStack(spacing: 6) {
+                                            Text(String(format: "$%.2f/sh", tx.price))
+                                                .font(.subheadline).fontWeight(.semibold)
+                                            Text("×")
+                                                .font(.caption2).foregroundColor(.secondary)
+                                            Text(String(format: "%.4f sh", tx.shares))
+                                                .font(.subheadline)
+                                        }
+                                        HStack(spacing: 6) {
+                                            Text(String(format: "Total: $%.2f", tx.amountInvested))
+                                                .font(.caption2).foregroundColor(.secondary)
+                                            Text("·").foregroundColor(.secondary)
+                                            Text(dateStr(tx.date)).font(.caption2).foregroundColor(.secondary)
+                                        }
+                                        if !tx.note.isEmpty {
+                                            Text(tx.note).font(.caption2).foregroundColor(.secondary)
+                                        }
+                                    }
+
+                                    Spacer()
+
+                                    Image(systemName: "pencil.circle.fill")
+                                        .foregroundColor(.blue).font(.title3)
+                                }
+                                .padding(.vertical, 4)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .swipeActions(edge: .trailing) {
+                                Button(role: .destructive) {
+                                    store.stockTransactions.removeAll { $0.id == tx.id }
+                                } label: { Label("Delete", systemImage: "trash") }
+                            }
+                        }
+                    }
+
+                    Button(action: { showAddTx = true }) {
+                        Label("Add Transaction", systemImage: "plus.circle.fill")
+                            .foregroundColor(.green).font(.subheadline)
+                    }
+                } header: {
+                    HStack {
+                        Text("Transactions — Tap to Edit")
+                        Spacer()
+                        Text("\(txHistory.count) records").font(.caption2)
+                    }
                 }
             }
             .navigationTitle("Edit \(stock.symbol)").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Save") { if symbolChanged { showSymbolWarning = true } else { performSave() } }
-                        .fontWeight(.bold).disabled(newSymbol.trimmingCharacters(in: .whitespaces).isEmpty)
+                    Button("Save") {
+                        if symbolChanged { showSymbolWarning = true } else { performSave() }
+                    }
+                    .fontWeight(.bold)
+                    .disabled(newSymbol.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
             .alert("Rename Ticker?", isPresented: $showSymbolWarning) {
@@ -2333,6 +2423,13 @@ struct EditStockView: View {
                 Button("Cancel", role: .cancel) { }
             } message: {
                 Text("This will rename all \(stock.symbol) transactions to \(newSymbol.uppercased()). Cannot be undone.")
+            }
+            .sheet(item: $editingTx) { tx in
+                EditStockTransactionView(tx: tx, store: store)
+            }
+            .sheet(isPresented: $showAddTx) {
+                // Pre-fill symbol for convenience
+                AddStockTransactionViewWithSymbol(store: store, prefilledSymbol: stock.symbol)
             }
         }
     }
@@ -2345,6 +2442,136 @@ struct EditStockView: View {
         if let price = Double(newPrice), price > 0 { store.updatePrice(symbol: finalSym, price: price) }
         dismiss()
     }
+
+    func dateStr(_ date: Date) -> String {
+        let f = DateFormatter(); f.dateFormat = "M/d/yy"; return f.string(from: date)
+    }
+}
+
+// Convenience wrapper — AddStockTransactionView with pre-filled symbol
+struct AddStockTransactionViewWithSymbol: View {
+    @ObservedObject var store: FinanceStore
+    let prefilledSymbol: String
+    @Environment(\.dismiss) var dismiss
+    @State private var symbol: String
+    @State private var type: StockTransactionType = .buy
+    @State private var inputMode: AddStockTransactionView.InputMode = .byAmount
+    @State private var amountStr = ""
+    @State private var sharesStr = ""
+    @State private var pricePerShareStr = ""
+    @State private var date = Date()
+    @State private var note = ""
+
+    init(store: FinanceStore, prefilledSymbol: String) {
+        self.store = store; self.prefilledSymbol = prefilledSymbol
+        _symbol = State(initialValue: prefilledSymbol)
+    }
+
+    var pricePerShare: Double? { Double(pricePerShareStr) }
+    var computedShares: Double {
+        switch inputMode {
+        case .byAmount:
+            guard let amt = Double(amountStr), let p = pricePerShare, p > 0 else { return 0 }
+            return amt / p
+        case .byShares:
+            return Double(sharesStr) ?? 0
+        }
+    }
+    var computedAmount: Double {
+        switch inputMode {
+        case .byAmount: return Double(amountStr) ?? 0
+        case .byShares:
+            guard let sh = Double(sharesStr), let p = pricePerShare else { return 0 }
+            return sh * p
+        }
+    }
+    var isValid: Bool {
+        guard let p = pricePerShare, p > 0, !symbol.isEmpty else { return false }
+        switch inputMode {
+        case .byAmount: return (Double(amountStr) ?? 0) > 0
+        case .byShares: return (Double(sharesStr) ?? 0) > 0
+        }
+    }
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section("Transaction Type") {
+                    Picker("Type", selection: $type) {
+                        ForEach(StockTransactionType.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }.pickerStyle(.segmented)
+                }
+                Section("Stock") {
+                    HStack {
+                        Text("Symbol").foregroundColor(.secondary)
+                        Spacer()
+                        Text(symbol).fontWeight(.semibold)
+                    }
+                    if let livePrice = store.manualPrices[symbol.uppercased()] {
+                        HStack {
+                            Text("Live price").foregroundColor(.secondary)
+                            Spacer()
+                            Text(String(format: "$%.2f", livePrice)).foregroundColor(.green).fontWeight(.semibold)
+                            Button("Use") { pricePerShareStr = String(format: "%.2f", livePrice) }
+                                .font(.caption).foregroundColor(.blue)
+                        }
+                    }
+                }
+                Section("Entry Method") {
+                    Picker("Enter by", selection: $inputMode) {
+                        ForEach(AddStockTransactionView.InputMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }.pickerStyle(.segmented)
+                }
+                Section("Details") {
+                    HStack {
+                        Text("Price per share").foregroundColor(.secondary)
+                        Spacer()
+                        Text("$").foregroundColor(.secondary)
+                        TextField("e.g. 213.00", text: $pricePerShareStr)
+                            .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 110)
+                    }
+                    if inputMode == .byAmount {
+                        HStack {
+                            Text("Total amount").foregroundColor(.secondary)
+                            Spacer()
+                            Text("$").foregroundColor(.secondary)
+                            TextField("e.g. 100.00", text: $amountStr)
+                                .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 110)
+                        }
+                    } else {
+                        HStack {
+                            Text("Shares").foregroundColor(.secondary)
+                            Spacer()
+                            TextField("e.g. 0.5000", text: $sharesStr)
+                                .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 110)
+                        }
+                    }
+                }
+                if isValid {
+                    Section("Summary") {
+                        HStack { Text("Shares").foregroundColor(.secondary); Spacer(); Text(String(format: "%.4f", computedShares)).fontWeight(.semibold) }
+                        HStack { Text("Total").foregroundColor(.secondary); Spacer(); Text(String(format: "$%.2f", computedAmount)).fontWeight(.bold).foregroundColor(type == .buy ? .red : .green) }
+                    }
+                }
+                Section("Date & Note") {
+                    DatePicker("Date", selection: $date, displayedComponents: [.date, .hourAndMinute])
+                    TextField("Note (optional)", text: $note)
+                }
+            }
+            .navigationTitle("Add \(symbol) Transaction").navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Save") {
+                        guard isValid, let p = pricePerShare else { return }
+                        let tx = StockTransaction(symbol: symbol.uppercased(), type: type,
+                            shares: computedShares, price: p, amountInvested: computedAmount, date: date, note: note)
+                        store.addStockTransaction(tx); dismiss()
+                    }.fontWeight(.bold).disabled(!isValid)
+                }
+            }
+        }
+    }
 }
 
 // MARK: - Stock Detail View
@@ -2354,6 +2581,7 @@ struct StockDetailView: View {
     @ObservedObject var store: FinanceStore
     @Environment(\.dismiss) var dismiss
     @State private var showEdit = false
+    @State private var editingTx: StockTransaction? = nil
 
     var txHistory: [StockTransaction] { store.transactionsFor(symbol: stock.symbol) }
 
@@ -2434,7 +2662,11 @@ struct StockDetailView: View {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("\(stock.symbol) Transactions").font(.headline)
                             ForEach(txHistory.reversed()) { tx in
-                                StockTransactionRow(tx: tx, onDelete: { store.stockTransactions.removeAll { $0.id == tx.id } })
+                                StockTransactionRow(
+                                    tx: tx,
+                                    onDelete: { store.stockTransactions.removeAll { $0.id == tx.id } },
+                                    onEdit: { editingTx = tx }
+                                )
                             }
                         }.padding().background(.regularMaterial).cornerRadius(16).padding(.horizontal)
                     }
@@ -2455,6 +2687,7 @@ struct StockDetailView: View {
                 }
             }
             .sheet(isPresented: $showEdit) { EditStockView(stock: stock, store: store) }
+            .sheet(item: $editingTx) { tx in EditStockTransactionView(tx: tx, store: store) }
         }
     }
 }
@@ -2493,24 +2726,42 @@ struct StockChartView: View {
     let stock: StockHolding; let transactions: [StockTransaction]; let priceHistory: [PricePoint]
 
     var chartData: [PricePoint] {
-        var pts = priceHistory
+        let cal = Calendar.current
 
-        // Always inject transaction price points so buy/sell markers have matching dates
+        // Current transaction prices — used to detect stale injected points
+        let txPrices = Set(transactions.map { $0.price })
+        let txDates  = transactions.map { $0.date }
+
+        // Filter price history: remove points that were injected from old transactions
+        // (i.e. price exactly matches a transaction price AND date is within 1 day of that tx)
+        // This removes stale points when a transaction is edited
+        var pts = priceHistory.filter { pt in
+            // Keep if it doesn't suspiciously match any transaction price/date combo
+            for tx in transactions {
+                if abs(pt.price - tx.price) < 0.001 &&
+                   abs(pt.date.timeIntervalSince(tx.date)) < 86400 {
+                    return false // stale injected point from old tx — remove
+                }
+            }
+            return true
+        }
+
+        // Inject current transaction price points so markers show correctly
         for tx in transactions {
-            // Only add if no point within 1 minute of the transaction
             let hasNearby = pts.contains { abs($0.date.timeIntervalSince(tx.date)) < 60 }
             if !hasNearby {
                 pts.append(PricePoint(date: tx.date, price: tx.price))
             }
         }
 
-        // Always include a current price point
-        if !pts.isEmpty {
-            pts.append(PricePoint(date: Date(), price: stock.currentPrice))
-        } else {
-            // Fallback: build from transactions only
-            pts = transactions.map { PricePoint(date: $0.date, price: $0.price) }
-            pts.append(PricePoint(date: Date(), price: stock.currentPrice))
+        // Always add current price as the latest point
+        pts.append(PricePoint(date: Date(), price: stock.currentPrice))
+
+        // If history is empty or only has tx points, build a simple line
+        if pts.count <= transactions.count + 1 {
+            var simple = transactions.map { PricePoint(date: $0.date, price: $0.price) }
+            simple.append(PricePoint(date: Date(), price: stock.currentPrice))
+            return simple.sorted { $0.date < $1.date }
         }
 
         return pts.sorted { $0.date < $1.date }
@@ -2864,23 +3115,36 @@ struct ArchivedStockDetailView: View {
 // MARK: - Stock Transaction Row
 
 struct StockTransactionRow: View {
-    let tx: StockTransaction; let onDelete: () -> Void
+    let tx: StockTransaction
+    let onDelete: () -> Void
+    var onEdit: (() -> Void)? = nil
     var dateString: String { let f = DateFormatter(); f.dateFormat = "M/d/yy"; return f.string(from: tx.date) }
     var body: some View {
         HStack(spacing: 12) {
             Text(tx.type == .buy ? "📈" : "📉").font(.system(size: 24))
-                .frame(width: 40, height: 40).background(tx.type == .buy ? Color.green.opacity(0.1) : Color.red.opacity(0.1)).cornerRadius(8)
+                .frame(width: 40, height: 40)
+                .background(tx.type == .buy ? Color.green.opacity(0.1) : Color.red.opacity(0.1))
+                .cornerRadius(8)
             VStack(alignment: .leading, spacing: 4) {
                 Text("\(tx.type.rawValue) \(tx.symbol)").font(.subheadline).fontWeight(.medium)
-                Text(String(format: "$%.2f @ $%.2f/sh · %.4f sh · ", tx.amountInvested, tx.price, tx.shares) + dateString).font(.caption2).foregroundColor(.secondary)
+                Text(String(format: "$%.2f @ $%.2f/sh · %.4f sh · ", tx.amountInvested, tx.price, tx.shares) + dateString)
+                    .font(.caption2).foregroundColor(.secondary)
                 if !tx.note.isEmpty { Text(tx.note).font(.caption2).foregroundColor(.secondary) }
             }
             Spacer()
             Text((tx.type == .buy ? "-" : "+") + String(format: "$%.2f", tx.amountInvested))
-                .font(.subheadline).fontWeight(.bold).foregroundColor(tx.type == .buy ? .red : .green)
+                .font(.subheadline).fontWeight(.bold)
+                .foregroundColor(tx.type == .buy ? .red : .green)
         }
         .padding().background(.regularMaterial).cornerRadius(12)
-        .swipeActions(edge: .trailing) { Button(role: .destructive, action: onDelete) { Label("Delete", systemImage: "trash") } }
+        .swipeActions(edge: .leading) {
+            if let edit = onEdit {
+                Button(action: edit) { Label("Edit", systemImage: "pencil") }.tint(.blue)
+            }
+        }
+        .swipeActions(edge: .trailing) {
+            Button(role: .destructive, action: onDelete) { Label("Delete", systemImage: "trash") }
+        }
     }
 }
 
@@ -2889,23 +3153,63 @@ struct StockTransactionRow: View {
 struct AddStockTransactionView: View {
     @ObservedObject var store: FinanceStore
     @Environment(\.dismiss) var dismiss
-    @State private var symbol = ""; @State private var type: StockTransactionType = .buy
-    @State private var amountInvested = ""; @State private var pricePerShare = ""
-    @State private var date = Date(); @State private var note = ""
+    @State private var symbol = ""
+    @State private var type: StockTransactionType = .buy
+    @State private var inputMode: InputMode = .byAmount  // toggle: by amount or by shares
+    @State private var amountStr = ""       // total $ amount
+    @State private var sharesStr = ""       // number of shares
+    @State private var pricePerShareStr = ""
+    @State private var date = Date()
+    @State private var note = ""
 
-    var sharesCalculated: Double {
-        guard let amt = Double(amountInvested), let price = Double(pricePerShare), price > 0 else { return 0 }
-        return amt / price
+    enum InputMode: String, CaseIterable {
+        case byAmount = "By Amount ($)"
+        case byShares = "By Shares"
     }
+
+    var pricePerShare: Double? { Double(pricePerShareStr) }
+    var amount: Double? { Double(amountStr) }
+    var shares: Double? { Double(sharesStr) }
+
+    var computedShares: Double {
+        switch inputMode {
+        case .byAmount:
+            guard let amt = amount, let price = pricePerShare, price > 0 else { return 0 }
+            return amt / price
+        case .byShares:
+            return shares ?? 0
+        }
+    }
+    var computedAmount: Double {
+        switch inputMode {
+        case .byAmount:
+            return amount ?? 0
+        case .byShares:
+            guard let sh = shares, let price = pricePerShare, price > 0 else { return 0 }
+            return sh * price
+        }
+    }
+    var isValid: Bool {
+        guard !symbol.isEmpty, let price = pricePerShare, price > 0 else { return false }
+        switch inputMode {
+        case .byAmount: return (amount ?? 0) > 0
+        case .byShares: return (shares ?? 0) > 0
+        }
+    }
+
     var body: some View {
         NavigationView {
             Form {
                 Section("Transaction Type") {
-                    Picker("Type", selection: $type) { ForEach(StockTransactionType.allCases, id: \.self) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented)
+                    Picker("Type", selection: $type) {
+                        ForEach(StockTransactionType.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }.pickerStyle(.segmented)
                 }
-                Section("Stock Details") {
+
+                Section("Stock") {
                     HStack {
-                        TextField("Ticker symbol (e.g. AAPL)", text: $symbol).textInputAutocapitalization(.characters)
+                        TextField("Ticker symbol (e.g. AAPL)", text: $symbol)
+                            .textInputAutocapitalization(.characters)
                         if !symbol.isEmpty {
                             Button(action: { store.fetchSinglePrice(symbol: symbol) }) {
                                 Image(systemName: store.fetcher.fetchingSymbols.contains(symbol.uppercased()) ? "hourglass" : "arrow.clockwise.circle")
@@ -2915,29 +3219,71 @@ struct AddStockTransactionView: View {
                     }
                     if let livePrice = store.manualPrices[symbol.uppercased()], !symbol.isEmpty {
                         HStack {
-                            Text("Live price").foregroundColor(.secondary); Spacer()
+                            Text("Live price").foregroundColor(.secondary)
+                            Spacer()
                             Text(String(format: "$%.2f", livePrice)).foregroundColor(.green).fontWeight(.semibold)
-                            Button("Use") { pricePerShare = String(format: "%.2f", livePrice) }
+                            Button("Use") { pricePerShareStr = String(format: "%.2f", livePrice) }
                                 .font(.caption).foregroundColor(.blue)
                         }
                     }
+                }
+
+                Section("Entry Method") {
+                    Picker("Enter by", selection: $inputMode) {
+                        ForEach(InputMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }.pickerStyle(.segmented)
+                }
+
+                Section("Details") {
+                    // Price per share — always required
                     HStack {
-                        Text(type == .buy ? "Amount to invest" : "Amount to sell").foregroundColor(.secondary); Spacer()
+                        Text("Price per share").foregroundColor(.secondary)
+                        Spacer()
                         Text("$").foregroundColor(.secondary)
-                        TextField("e.g. 50.00", text: $amountInvested).keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 120)
+                        TextField("e.g. 213.00", text: $pricePerShareStr)
+                            .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 110)
                     }
-                    HStack {
-                        Text("Price per share").foregroundColor(.secondary); Spacer()
-                        Text("$").foregroundColor(.secondary)
-                        TextField("e.g. 256.41", text: $pricePerShare).keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 120)
+
+                    if inputMode == .byAmount {
+                        HStack {
+                            Text(type == .buy ? "Amount invested" : "Amount received").foregroundColor(.secondary)
+                            Spacer()
+                            Text("$").foregroundColor(.secondary)
+                            TextField("e.g. 100.00", text: $amountStr)
+                                .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 110)
+                        }
+                    } else {
+                        HStack {
+                            Text("Number of shares").foregroundColor(.secondary)
+                            Spacer()
+                            TextField("e.g. 0.5000", text: $sharesStr)
+                                .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 110)
+                        }
                     }
                 }
-                if sharesCalculated > 0 {
+
+                // Live summary
+                if isValid {
                     Section("Summary") {
-                        HStack { Text("Shares " + (type == .buy ? "bought" : "sold")).foregroundColor(.secondary); Spacer(); Text(String(format: "%.4f shares", sharesCalculated)).fontWeight(.semibold) }
-                        HStack { Text("Total " + (type == .buy ? "invested" : "received")).foregroundColor(.secondary); Spacer(); Text(String(format: "$%.2f", Double(amountInvested) ?? 0)).fontWeight(.bold).foregroundColor(type == .buy ? .red : .green) }
+                        HStack {
+                            Text("Shares \(type == .buy ? "bought" : "sold")").foregroundColor(.secondary)
+                            Spacer()
+                            Text(String(format: "%.4f sh", computedShares)).fontWeight(.semibold)
+                        }
+                        HStack {
+                            Text("Total \(type == .buy ? "invested" : "received")").foregroundColor(.secondary)
+                            Spacer()
+                            Text(String(format: "$%.2f", computedAmount)).fontWeight(.bold)
+                                .foregroundColor(type == .buy ? .red : .green)
+                        }
+                        HStack {
+                            Text("Price per share").foregroundColor(.secondary)
+                            Spacer()
+                            Text(String(format: "$%.2f", pricePerShare ?? 0)).fontWeight(.semibold)
+                        }
                     }
                 }
+
                 Section("Date & Note") {
                     DatePicker("Date", selection: $date, displayedComponents: [.date, .hourAndMinute])
                     TextField("Note (optional)", text: $note)
@@ -2948,10 +3294,168 @@ struct AddStockTransactionView: View {
                 ToolbarItem(placement: .navigationBarLeading) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Save") {
-                        guard !symbol.isEmpty, let amt = Double(amountInvested), amt > 0, let price = Double(pricePerShare), price > 0 else { return }
-                        let tx = StockTransaction(symbol: symbol.uppercased(), type: type, shares: sharesCalculated, price: price, amountInvested: amt, date: date, note: note)
+                        guard isValid else { return }
+                        let tx = StockTransaction(
+                            symbol: symbol.uppercased(), type: type,
+                            shares: computedShares, price: pricePerShare ?? 0,
+                            amountInvested: computedAmount, date: date, note: note
+                        )
                         store.addStockTransaction(tx); dismiss()
-                    }.fontWeight(.bold).disabled(symbol.isEmpty || amountInvested.isEmpty || pricePerShare.isEmpty || sharesCalculated <= 0)
+                    }.fontWeight(.bold).disabled(!isValid)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Edit Stock Transaction
+
+struct EditStockTransactionView: View {
+    let tx: StockTransaction
+    @ObservedObject var store: FinanceStore
+    @Environment(\.dismiss) var dismiss
+
+    @State private var inputMode: InputMode = .byAmount
+    @State private var sharesStr: String
+    @State private var pricePerShareStr: String
+    @State private var amountStr: String
+    @State private var date: Date
+    @State private var note: String
+    @State private var type: StockTransactionType
+
+    enum InputMode: String, CaseIterable {
+        case byAmount = "By Amount ($)"
+        case byShares = "By Shares"
+    }
+
+    init(tx: StockTransaction, store: FinanceStore) {
+        self.tx = tx; self.store = store
+        _sharesStr        = State(initialValue: String(format: "%.4f", tx.shares))
+        _pricePerShareStr = State(initialValue: String(format: "%.2f", tx.price))
+        _amountStr        = State(initialValue: String(format: "%.2f", tx.amountInvested))
+        _date             = State(initialValue: tx.date)
+        _note             = State(initialValue: tx.note)
+        _type             = State(initialValue: tx.type)
+        _inputMode        = State(initialValue: .byAmount)
+    }
+
+    var pricePerShare: Double { Double(pricePerShareStr) ?? tx.price }
+    var computedShares: Double {
+        switch inputMode {
+        case .byAmount: return pricePerShare > 0 ? (Double(amountStr) ?? 0) / pricePerShare : 0
+        case .byShares: return Double(sharesStr) ?? 0
+        }
+    }
+    var computedAmount: Double {
+        switch inputMode {
+        case .byAmount: return Double(amountStr) ?? 0
+        case .byShares: return computedShares * pricePerShare
+        }
+    }
+    var isValid: Bool {
+        pricePerShare > 0 && computedShares > 0 && computedAmount > 0
+    }
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section("Transaction Type") {
+                    Picker("Type", selection: $type) {
+                        ForEach(StockTransactionType.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }.pickerStyle(.segmented)
+                }
+
+                Section {
+                    HStack {
+                        Text("Symbol").foregroundColor(.secondary)
+                        Spacer()
+                        Text(tx.symbol).fontWeight(.semibold).foregroundColor(.secondary)
+                    }
+                } header: { Text("Stock (symbol cannot be changed here)") }
+
+                Section("Entry Method") {
+                    Picker("Enter by", selection: $inputMode) {
+                        ForEach(InputMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }.pickerStyle(.segmented)
+                }
+
+                Section("Edit Details") {
+                    // Price per share
+                    HStack {
+                        Text("Price per share").foregroundColor(.secondary)
+                        Spacer()
+                        Text("$").foregroundColor(.secondary)
+                        TextField("price", text: $pricePerShareStr)
+                            .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 110)
+                    }
+
+                    if inputMode == .byAmount {
+                        HStack {
+                            Text("Total amount").foregroundColor(.secondary)
+                            Spacer()
+                            Text("$").foregroundColor(.secondary)
+                            TextField("amount", text: $amountStr)
+                                .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 110)
+                        }
+                    } else {
+                        HStack {
+                            Text("Shares").foregroundColor(.secondary)
+                            Spacer()
+                            TextField("shares", text: $sharesStr)
+                                .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 110)
+                        }
+                    }
+                }
+
+                // Live preview
+                Section("Updated Summary") {
+                    HStack {
+                        Text("Shares").foregroundColor(.secondary); Spacer()
+                        Text(String(format: "%.4f", computedShares)).fontWeight(.semibold)
+                    }
+                    HStack {
+                        Text("Price per share").foregroundColor(.secondary); Spacer()
+                        Text(String(format: "$%.2f", pricePerShare)).fontWeight(.semibold)
+                    }
+                    HStack {
+                        Text("Total").foregroundColor(.secondary); Spacer()
+                        Text(String(format: "$%.2f", computedAmount)).fontWeight(.bold)
+                            .foregroundColor(type == .buy ? .red : .green)
+                    }
+                }
+
+                Section("Date & Note") {
+                    DatePicker("Date", selection: $date, displayedComponents: [.date, .hourAndMinute])
+                    TextField("Note (optional)", text: $note)
+                }
+            }
+            .navigationTitle("Edit Transaction").navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Save") {
+                        guard isValid else { return }
+                        // Replace transaction in store
+                        if let i = store.stockTransactions.firstIndex(where: { $0.id == tx.id }) {
+                            let oldPrice = store.stockTransactions[i].price
+                            let oldDate  = store.stockTransactions[i].date
+                            store.stockTransactions[i] = StockTransaction(
+                                id: tx.id, symbol: tx.symbol, type: type,
+                                shares: computedShares, price: pricePerShare,
+                                amountInvested: computedAmount, date: date, note: note
+                            )
+                            // Remove any price history point that was injected from the old tx
+                            // so the chart doesn't show a stale spike
+                            if var history = store.priceHistories[tx.symbol.uppercased()] {
+                                history.removeAll { pt in
+                                    abs(pt.price - oldPrice) < 0.001 &&
+                                    abs(pt.date.timeIntervalSince(oldDate)) < 86400
+                                }
+                                store.priceHistories[tx.symbol.uppercased()] = history
+                            }
+                        }
+                        dismiss()
+                    }.fontWeight(.bold).disabled(!isValid)
                 }
             }
         }
