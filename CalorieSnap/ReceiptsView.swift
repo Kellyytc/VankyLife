@@ -267,6 +267,11 @@ struct RecipeDetailView: View {
                 if !parsed.ingredients.isEmpty {
                     Section {
                         ForEach(Array(parsed.ingredients.enumerated()), id: \.offset) { i, item in
+                            if item.hasPrefix("【") {
+                                Text(item.trimmingCharacters(in: CharacterSet(charactersIn: "【】")))
+                                    .font(.subheadline).fontWeight(.semibold)
+                                    .foregroundStyle(.orange)
+                            } else {
                             Button {
                                 if checkedIngredients.contains(i) { checkedIngredients.remove(i) }
                                 else { checkedIngredients.insert(i) }
@@ -281,6 +286,7 @@ struct RecipeDetailView: View {
                                 }
                             }
                             .buttonStyle(.plain)
+                            }
                         }
                     } header: {
                         Text("Ingredients")
@@ -434,14 +440,23 @@ enum RecipeOCR {
     static func lines(in image: UIImage) async -> [String] {
         guard let cg = image.cgImage else { return [] }
         let orientation = cgOrientation(image.imageOrientation)
-        return await Task.detached(priority: .userInitiated) {
+        let boxes = await Task.detached(priority: .userInitiated) {
             let request = VNRecognizeTextRequest()
             request.recognitionLevel = .accurate
             request.usesLanguageCorrection = true
-            request.recognitionLanguages = ["en-US", "zh-Hans", "zh-Hant"]
+            request.revision = VNRecognizeTextRequestRevision3
+            request.recognitionLanguages = ["zh-Hans", "zh-Hant", "en-US"]   // Chinese must come first, or Chinese text turns into symbols
             try? VNImageRequestHandler(cgImage: cg, orientation: orientation, options: [:]).perform([request])
-            return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+            return (request.results ?? []).compactMap { obs -> RecipeParser.TextBox? in
+                guard let text = obs.topCandidates(1).first?.string else { return nil }
+                let r = obs.boundingBox   // 0–1, origin at the bottom-left
+                return RecipeParser.TextBox(text: text, minX: r.minX, maxX: r.maxX,
+                                            midY: 1 - r.midY, height: r.height)
+            }
         }.value
+        // Tall images are phone screenshots: skip the app's header and bottom bar
+        let isScreenshot = image.size.height / max(image.size.width, 1) >= 1.9
+        return RecipeParser.assembleLines(boxes, isScreenshot: isScreenshot)
     }
 
     static func cgOrientation(_ o: UIImage.Orientation) -> CGImagePropertyOrientation {
@@ -475,6 +490,7 @@ struct NewRecipeView: View {
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var photos: [UIImage] = []
     @State private var isReading = false
+    @State private var autoTitle = ""
     @State private var readMessage: String?
 
     private var tagChoices: [String] {
@@ -658,7 +674,10 @@ struct NewRecipeView: View {
 
         guard !lines.isEmpty else { readMessage = "No text found in the photos."; return }
         let parsed = RecipeParser.parse(lines)
-        if title.isEmpty { title = RecipeParser.detectTitle(in: lines) }
+        if title.isEmpty || title == autoTitle {
+            autoTitle = RecipeParser.detectTitle(in: lines)
+            title = autoTitle
+        }
         if parsed.isEmpty {
             steps = lines.joined(separator: "\n")
             readMessage = "Couldn't tell ingredients from steps, so all the text went into Steps. Move lines as needed."

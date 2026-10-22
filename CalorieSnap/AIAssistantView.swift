@@ -77,19 +77,21 @@ enum AITopic: String, CaseIterable, Identifiable {
     }
     var suggestions: [String] {
         switch self {
-        case .recipes: return ["What can I cook tonight?", "High-protein breakfast ideas", "Plan my meals for 3 days", "Which saved recipe is lightest?"]
+        case .recipes: return ["What can I cook with my fridge?", "What's expiring soon?", "How many calories left today?", "Plan my meals for 3 days", "High-protein breakfast ideas"]
         case .weight:  return ["Am I on track?", "Why did my weight go up?", "How many calories should I eat?", "Tips for a plateau"]
-        case .health:  return ["Why do I feel tired?", "How can I sleep better?", "Is today good for a workout?", "What affects my HRV?"]
+        case .health:  return ["How did I sleep last night?", "Why do I feel tired?", "How's my HRV?", "When is my next period?", "How can I sleep better?"]
         case .training: return ["Should I rest today?", "Plan my week", "Am I training too much?", "Best workouts for weight loss"]
-        case .money:   return ["Is my portfolio diversified?", "Where did my money go this month?", "Explain my biggest position", "What should I learn about CDs?"]
+        case .money:   return ["Is my portfolio diversified?", "Where did my money go this month?", "How are my stocks doing today?", "When do my CDs mature?"]
         case .news:    return ["Anything worrying?", "Which stock has the most news?", "Explain the biggest story simply", "Any earnings coming up?"]
-        case .chat:    return ["Plan a healthy week for me", "What should I focus on today?", "Summarise how I'm doing"]
+        case .chat:    return ["How am I doing today?", "Why am I so tired?", "What can I cook with my fridge?",
+                               "When is my next period?", "What's on tomorrow?", "What should I focus on this week?",
+                               "Any overdue to-dos?", "How are my stocks today?"]
         }
     }
     var disclaimer: String {
         switch self {
         case .health, .weight, .training: return "General wellness ideas, not medical advice. Talk to a doctor about health concerns, and stop if exercise hurts."
-        case .money: return "General information only, not financial advice. The AI doesn't know market news or prices beyond your app."
+        case .money: return "General information only, not financial advice. Prices come from Yahoo Finance and may be delayed."
         case .news: return "Headlines from Yahoo Finance. The AI reads only the headlines, not the full articles, and can misread them. Not financial advice."
         default: return "Suggestions come from Apple Intelligence on your iPhone and can be wrong."
         }
@@ -461,6 +463,59 @@ struct MoneyFacts {
     }
 }
 
+// MARK: - Live market check (all numbers come from Yahoo and are worked out by the app)
+
+struct LiveQuote {
+    let symbol: String
+    let price: Double
+    let prevClose: Double
+    let time: Date?
+    var change: Double { price - prevClose }
+    var changePct: Double { prevClose > 0 ? change / prevClose * 100 : 0 }
+}
+
+enum MarketData {
+    static let indexes: [(symbol: String, name: String)] = [
+        ("^GSPC", "S&P 500"), ("^IXIC", "Nasdaq"), ("^DJI", "Dow"), ("^GSPTSE", "TSX"),
+    ]
+
+    static func quote(_ symbol: String) async -> LiveQuote? {
+        let sym = symbol.uppercased().addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(.init(charactersIn: ".-"))) ?? symbol
+        guard let url = URL(string: "https://query1.finance.yahoo.com/v8/finance/chart/\(sym)?interval=5m&range=1d") else { return nil }
+        var req = URLRequest(url: url, timeoutInterval: 10)
+        req.setValue("Mozilla/5.0", forHTTPHeaderField: "User-Agent")
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let chart = json["chart"] as? [String: Any],
+              let result = (chart["result"] as? [[String: Any]])?.first,
+              let meta = result["meta"] as? [String: Any],
+              let price = meta["regularMarketPrice"] as? Double,
+              let prev = (meta["chartPreviousClose"] as? Double) ?? (meta["previousClose"] as? Double)
+        else { return nil }
+        let time = (meta["regularMarketTime"] as? Double).map { Date(timeIntervalSince1970: $0) }
+        return LiveQuote(symbol: symbol, price: price, prevClose: prev, time: time)
+    }
+
+    static func quotes(_ symbols: [String]) async -> [String: LiveQuote] {
+        var out: [String: LiveQuote] = [:]
+        await withTaskGroup(of: LiveQuote?.self) { group in
+            for s in Set(symbols) { group.addTask { await quote(s) } }
+            for await q in group { if let q { out[q.symbol] = q } }
+        }
+        return out
+    }
+}
+
+enum MoneyFormat {
+    static func usd(_ v: Double, cents: Bool = false) -> String {
+        let n = abs(v)
+        return "$" + (cents ? n.formatted(.number.precision(.fractionLength(2))) : Int(n.rounded()).formatted())
+    }
+    static func signedUSD(_ v: Double) -> String { (v >= 0 ? "+" : "−") + usd(v, cents: abs(v) < 100) }
+    static func signedPct(_ v: Double) -> String { (v >= 0 ? "+" : "−") + String(format: "%.2f%%", abs(v)) }
+    static func arrow(_ v: Double) -> String { v > 0.005 ? "▲" : (v < -0.005 ? "▼" : "•") }
+}
+
 // MARK: - Structured meal plan (forces breakfast, lunch, dinner and snack every day)
 
 @Generable
@@ -526,6 +581,7 @@ final class KellyAI: ObservableObject {
     private let finance: FinanceStore
     private let energy = EnergyStore()
     private var energyLoaded = false
+    private var lastTurn: KellyBrain.Turn?
 
     init(finance: FinanceStore) { self.finance = finance }
 
@@ -548,6 +604,7 @@ final class KellyAI: ObservableObject {
     func open(_ topic: AITopic) async {
         self.topic = topic
         messages = []
+        lastTurn = nil
         guard unavailableReason == nil else { return }
         isPreparing = true
         instructions = await buildInstructions(for: topic)
@@ -594,19 +651,35 @@ final class KellyAI: ObservableObject {
 
     private func respond(_ q: String) async throws -> String {
         guard let session else { return "" }
+        let intents = AskIntent.detect(q)
         if topic != .money && topic != .news, let target = Self.goalWeight(in: q) {
             if let plan = await goalPlan(target: target, question: q) { return plan }
         }
-        if topic == .recipes, let days = Self.planDays(in: q) {
+        if let days = Self.planDays(in: q),
+           topic == .recipes || intents.contains(.food) || intents.contains(.recipes) {
             return try await mealPlan(days: days, request: q, session: session)
         }
         if topic == .money, Self.wantsMoneyOverview(q) {
             return try await moneyOverview(request: q, session: session)
         }
-        if topic == .training, Self.wantsTrainingPlan(q) {
+        if topic == .money || topic == .news || topic == .chat || intents.contains(.stocks) {
+            if let answer = await moneyAnswer(q) { return answer }
+        }
+        if Self.wantsTrainingPlan(q), topic == .training || intents.contains(.workouts) {
+            await loadEnergyIfNeeded()
             return try await trainingPlan(request: q, session: session)
         }
-        return try await session.respond(to: q).content
+
+        // Everything else: the app's numbers for what was asked + advice from the AI
+        await loadEnergyIfNeeded()
+        if (intents.contains(.news) || (intents.isEmpty && topic == .news)) && headlines.isEmpty {
+            let symbols = finance.stockHoldings.filter { $0.shares > 0.0001 }.map(\.symbol)
+            headlines = await StockNews.fetch(symbols: symbols)
+        }
+        let result = await KellyBrain.answer(q, topic: topic, previous: lastTurn, energy: energy,
+                                             finance: finance, headlines: headlines)
+        lastTurn = KellyBrain.Turn(question: q, answer: result.text, intents: result.intents)
+        return result.text
     }
 
     /// Number of days if the question asks for a meal plan, otherwise nil.
@@ -711,6 +784,167 @@ final class KellyAI: ObservableObject {
                 out.append("**Tips for you**")
                 out.append(tips)
             }
+        }
+        return out.joined(separator: "\n")
+    }
+
+    // MARK: Money questions answered by the app (no AI guessing)
+
+    /// Answers market / "how are my stocks" / one-stock / CD / spending questions with real numbers.
+    /// Returns nil when the question is something else.
+    private func moneyAnswer(_ q: String) async -> String? {
+        let lower = " " + q.lowercased()
+        let holdings = finance.stockHoldings.filter { $0.shares > 0.0001 }
+        let mySymbols = holdings.map { $0.symbol.uppercased() }
+        let isMoneyTopic = topic == .money || topic == .news
+        let mentionsStocks = ["stock", "market", "portfolio", "share", "nasdaq", "s&p", "dow", "股", "大盘", "行情", "基金"]
+            .contains { lower.contains($0) }
+        guard isMoneyTopic || mentionsStocks else { return nil }
+
+        // One of her stocks named in the question
+        let words = Set(q.uppercased().split(whereSeparator: { !$0.isLetter && $0 != "." }).map(String.init))
+        let named = mySymbols.filter { words.contains($0) || words.contains($0.replacingOccurrences(of: ".TO", with: "")) }
+        if let sym = named.first, let h = holdings.first(where: { $0.symbol.uppercased() == sym }) {
+            return await stockAnswer(h)
+        }
+        let todayWords = ["today", "market", "how are my", "how's my", "hows my", "how my", "how is my", "doing", "perform",
+                          "moving", "up or down", "price", "right now", "今天", "今日", "行情", "大盘", "涨", "跌", "表现", "怎么样"]
+        if todayWords.contains(where: { lower.contains($0) }) && !Self.wantsMoneyOverview(q) {
+            return await marketToday()
+        }
+        guard isMoneyTopic else { return nil }
+        let facts = MoneyFacts(finance)
+        if [" cd", "cds", "certificate", "matur", "interest", "定期", "存款", "利息", "到期"].contains(where: { lower.contains($0) }) {
+            return cdAnswer(facts)
+        }
+        if ["spend", "spent", "budget", "expense", "花", "支出", "预算", "消费"].contains(where: { lower.contains($0) }) {
+            return spendingAnswer(facts)
+        }
+        return nil
+    }
+
+    private func marketToday() async -> String {
+        let holdings = finance.stockHoldings.filter { $0.shares > 0.0001 }
+        let quotes = await MarketData.quotes(MarketData.indexes.map(\.symbol) + holdings.map(\.symbol))
+        guard !quotes.isEmpty else {
+            return "I couldn't get prices right now (no internet connection, or Yahoo Finance didn't answer). Try again in a minute."
+        }
+        var out: [String] = []
+        let asOf = MarketData.indexes.compactMap { quotes[$0.symbol]?.time }.max()
+        var header = "**Market today**"
+        if let asOf {
+            header += " (as of \(asOf.formatted(.dateTime.weekday(.abbreviated).hour().minute())))"
+            if Date().timeIntervalSince(asOf) > 30 * 60 { header += ". Markets are closed, so these are the last session's moves" }
+        }
+        out.append(header)
+        let idx = MarketData.indexes.compactMap { i -> String? in
+            guard let q = quotes[i.symbol] else { return nil }
+            return "\(MoneyFormat.arrow(q.changePct)) \(i.name) \(MoneyFormat.signedPct(q.changePct))"
+        }
+        if !idx.isEmpty { out.append("- " + idx.joined(separator: " · ")) }
+
+        guard !holdings.isEmpty else {
+            out.append("")
+            out.append("You don't have any stocks in the app yet.")
+            return out.joined(separator: "\n")
+        }
+
+        struct Move { let symbol: String; let pct: Double; let dollars: Double; let value: Double }
+        let moves: [Move] = holdings.compactMap { h in
+            guard let q = quotes[h.symbol] else { return nil }
+            return Move(symbol: h.symbol, pct: q.changePct, dollars: q.change * h.shares, value: q.price * h.shares)
+        }
+        out.append("")
+        out.append("**Your stocks today**")
+        if moves.isEmpty {
+            out.append("- Couldn't load prices for your stocks.")
+        } else {
+            let dayDollars = moves.reduce(0) { $0 + $1.dollars }
+            let nowValue = moves.reduce(0) { $0 + $1.value }
+            let startValue = nowValue - dayDollars
+            let dayPct = startValue > 0 ? dayDollars / startValue * 100 : 0
+            out.append("- \(MoneyFormat.arrow(dayDollars)) \(dayDollars >= 0 ? "Up" : "Down") \(MoneyFormat.usd(dayDollars, cents: abs(dayDollars) < 100)) (\(MoneyFormat.signedPct(dayPct))) today · worth \(MoneyFormat.usd(nowValue))")
+            if let sp = quotes["^GSPC"] {
+                let diff = dayPct - sp.changePct
+                if abs(diff) >= 0.1 {
+                    out.append("- \(diff > 0 ? "Doing better" : "Doing worse") than the S&P 500 by \(String(format: "%.2f", abs(diff))) points")
+                } else {
+                    out.append("- About the same as the S&P 500")
+                }
+            }
+            for m in moves.sorted(by: { abs($0.pct) > abs($1.pct) }).prefix(8) {
+                out.append("- \(MoneyFormat.arrow(m.pct)) \(m.symbol) \(MoneyFormat.signedPct(m.pct)) (\(MoneyFormat.signedUSD(m.dollars)))")
+            }
+            if moves.count < holdings.count { out.append("- \(holdings.count - moves.count) more couldn't be loaded") }
+
+            // Headlines for the biggest movers
+            let movers = moves.sorted { abs($0.pct) > abs($1.pct) }.prefix(3).map(\.symbol)
+            let news = await StockNews.fetch(symbols: Array(movers))
+            if !news.isEmpty {
+                out.append("")
+                out.append("**In the news**")
+                for h in news.prefix(4) {
+                    let title = h.title.replacingOccurrences(of: "[", with: "(").replacingOccurrences(of: "]", with: ")")
+                    out.append(h.url != nil ? "- \(h.symbol): [\(title)](\(h.id))" : "- \(h.symbol): \(title)")
+                }
+            }
+        }
+        out.append("")
+        out.append("_Prices from Yahoo Finance, may be delayed. Not financial advice._")
+        return out.joined(separator: "\n")
+    }
+
+    private func stockAnswer(_ h: StockHolding) async -> String {
+        async let quoteTask = MarketData.quote(h.symbol)
+        async let newsTask = StockNews.fetch(symbols: [h.symbol])
+        let (q, news) = await (quoteTask, newsTask)
+        let facts = MoneyFacts(finance)
+        let price = q?.price ?? h.currentPrice
+        let value = price * h.shares
+        let gain = value - h.totalCost
+        let gainPct = h.totalCost > 0 ? gain / h.totalCost * 100 : 0
+        let share = facts.stocksTotal > 0 ? value / facts.stocksTotal * 100 : 0
+        var out = ["**\(h.symbol)**\(h.name.isEmpty || h.name == h.symbol ? "" : " · \(h.name)")"]
+        if let q {
+            out.append("- Today: \(MoneyFormat.arrow(q.changePct)) \(MoneyFormat.signedPct(q.changePct)) at \(MoneyFormat.usd(q.price, cents: true)) (\(MoneyFormat.signedUSD(q.change * h.shares)) for your shares)")
+        }
+        out.append("- You own \(h.shares.formatted(.number.precision(.fractionLength(0...4)))) shares worth \(MoneyFormat.usd(value)), \(String(format: "%.0f%%", share)) of your stocks")
+        out.append("- Since you bought (avg \(MoneyFormat.usd(h.avgBuyPrice, cents: true))): \(gain >= 0 ? "up" : "down") \(MoneyFormat.usd(gain, cents: abs(gain) < 100)) (\(MoneyFormat.signedPct(gainPct)))")
+        if !news.isEmpty {
+            out.append("")
+            out.append("**Recent news**")
+            for n in news.prefix(4) {
+                let title = n.title.replacingOccurrences(of: "[", with: "(").replacingOccurrences(of: "]", with: ")")
+                out.append("- [\(title)](\(n.id)) · \(n.publisher), \(n.date.formatted(.dateTime.month(.abbreviated).day()))")
+            }
+        }
+        out.append("")
+        out.append("_Prices from Yahoo Finance, may be delayed. Not financial advice._")
+        return out.joined(separator: "\n")
+    }
+
+    private func cdAnswer(_ f: MoneyFacts) -> String {
+        guard !f.cds.isEmpty else { return "You don't have any CDs in the app yet." }
+        let avg = f.cdsTotal > 0 ? f.cds.reduce(0) { $0 + $1.annualRate * $1.principal } / f.cdsTotal : 0
+        var out = ["**Your CDs**: \(f.cds.count) totalling \(MoneyFormat.usd(f.cdsTotal)), average \(String(format: "%.2f%%", avg))"]
+        let cal = Calendar.current
+        for cd in f.cds {
+            let days = cal.dateComponents([.day], from: cal.startOfDay(for: Date()), to: cal.startOfDay(for: cd.maturityDate)).day ?? 0
+            let when = days > 0 ? "in \(days) days" : (days == 0 ? "today" : "matured")
+            out.append("- \(cd.bankName.isEmpty ? "CD" : cd.bankName): \(MoneyFormat.usd(cd.principal)) at \(String(format: "%.2f%%", cd.annualRate)), matures \(cd.maturityDate.formatted(.dateTime.month(.abbreviated).day().year())) (\(when)), interest about \(MoneyFormat.usd(cd.estimatedInterest))")
+        }
+        return out.joined(separator: "\n")
+    }
+
+    private func spendingAnswer(_ f: MoneyFacts) -> String {
+        guard f.hasTransactions else {
+            return "You haven't recorded any spending this month yet, so there's nothing to look at. Add transactions in the Finance tab and ask again."
+        }
+        var out = ["**This month**: spent \(MoneyFormat.usd(f.spent))"
+                   + (f.budget > 0 ? " of your \(MoneyFormat.usd(f.budget)) budget (\(String(format: "%.0f%%", f.spent / f.budget * 100)))" : "")
+                   + (f.income > 0 ? ", income \(MoneyFormat.usd(f.income))" : "")]
+        for (cat, amount) in f.topCategories.prefix(6) {
+            out.append("- \(cat): \(MoneyFormat.usd(amount))")
         }
         return out.joined(separator: "\n")
     }
