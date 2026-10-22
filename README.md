@@ -31,6 +31,7 @@ A personal health & lifestyle iOS app built with SwiftUI — designed around one
 - Meal plans from your saved recipes, with calories totalled by the app
 - Training & rest-day week plans built from sleep, readiness and workouts
 - Goal-weight plan with app-calculated timeline, milestones and calorie targets
+- Answers questions across sleep, energy, HRV, steps, workouts, weight, food, recipes, fridge, cycle, calendar, countdowns, to-dos, wishes, stocks, CDs and spending, with real numbers shown first
 - Money snapshot where the app computes every number (stocks vs CDs, top holdings, groups, CD maturities) and the AI only adds observations
 - Latest headlines for the stocks you own
 
@@ -156,6 +157,7 @@ CalorieSnap/
 ├── EnergyView.swift        — Energy score, readiness, mushroom companion, workouts
 ├── OuraService.swift       — Oura sign-in, readiness, sleep, ring battery
 ├── AIAssistantView.swift   — Kelly AI (on-device), money facts, stock news
+├── KellyBrain.swift        — Kelly AI question routing and app-calculated facts for every category
 ├── ReceiptsView.swift      — Kitchen tab, recipes list/detail/editor
 ├── ReceiptParser.swift     — Recipe model & text parsing (shared with extension)
 ├── ReceiptStore.swift      — Recipe storage in the App Group (shared)
