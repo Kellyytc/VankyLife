@@ -89,16 +89,18 @@ struct ContentView: View {
     @StateObject private var calendarStore = CalendarStore()
     @StateObject private var todoStore = TodoStore()
     @State private var selectedTab: Int = 0
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         ZStack(alignment: .bottom) {
             Group {
                 switch selectedTab {
                 case 0: DashboardView(financeStore: financeStore, calendarStore: calendarStore, todoStore: todoStore)
-                case 1: FridgeView()
+                case 1: KitchenView()
                 case 2: CalendarView(store: calendarStore)
                 case 3: FinanceView(store: financeStore)
                 case 4: ProfileView()
+                case 5: ReceiptsView()
                 default: DashboardView(financeStore: financeStore, calendarStore: calendarStore, todoStore: todoStore)
                 }
             }
@@ -107,7 +109,7 @@ struct ContentView: View {
 
             HStack(spacing: 0) {
                 CustomTabItem(icon: "flame.fill",        label: "Today",    tag: 0, selected: $selectedTab)
-                CustomTabItem(icon: "refrigerator",      label: "Fridge",   tag: 1, selected: $selectedTab)
+                CustomTabItem(icon: "fork.knife", label: "Kitchen", tag: 1, selected: $selectedTab)
                 CustomTabItem(icon: "calendar",          label: "Calendar", tag: 2, selected: $selectedTab)
                 CustomTabItem(icon: "dollarsign.circle", label: "Finance",  tag: 3, selected: $selectedTab)
                 CustomTabItem(icon: "person.circle",     label: "Profile",  tag: 4, selected: $selectedTab)
@@ -117,6 +119,9 @@ struct ContentView: View {
             .overlay(Divider(), alignment: .top)
         }
         .ignoresSafeArea(edges: .bottom)
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active || phase == .background { KellyBackup.autoBackupIfNeeded() }
+        }
     }
 }
 
@@ -285,7 +290,10 @@ struct DashboardView: View {
                             }
                             .padding(.horizontal)
                         }
-
+                        // Energy score (Oura-style, from Apple Health)
+                        EnergyCard()
+                            .padding(.horizontal)
+                        
                         // Exercise bonus
                         if healthKit.isAuthorized && healthKit.activeCalories > 0 {
                             HStack(spacing: 8) {

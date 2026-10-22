@@ -425,6 +425,26 @@ struct ProfileView: View {
 
                     if selectedTab == .wishes { wishSection } else { achievementSection }
 
+                    // Backup & Restore
+                    NavigationLink(destination: BackupView()) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "externaldrive.badge.icloud")
+                                .font(.title3).foregroundColor(.blue)
+                                .frame(width: 36, height: 36)
+                                .background(Color.blue.opacity(0.12)).cornerRadius(10)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Backup & Restore").font(.subheadline).fontWeight(.semibold)
+                                Text("Keep a copy of your data in OneDrive or iCloud Drive")
+                                    .font(.caption).foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right").font(.footnote).foregroundColor(.secondary)
+                        }
+                        .padding().background(.regularMaterial).cornerRadius(16)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal)
+
                     VStack(spacing: 4) {
                         Text("Kelly Life").font(.caption).foregroundColor(.secondary)
                         Text("Built with ❤️ for healthy living").font(.caption2).foregroundColor(.secondary)

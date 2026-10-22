@@ -92,21 +92,31 @@ class HealthKitManager: ObservableObject {
 
     func fetchSleep() {
         guard let type = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) else { return }
-        let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: Date())!
-        let start = Calendar.current.startOfDay(for: yesterday)
-        let end = Calendar.current.startOfDay(for: Date())
-        let predicate = HKQuery.predicateForSamples(withStart: start, end: end)
-        let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)
-        let query = HKSampleQuery(sampleType: type, predicate: predicate, limit: 30, sortDescriptors: [sort]) { _, samples, _ in
+        let cal = Calendar.current
+        // Last night = from 6 PM yesterday until now, so late bedtimes after midnight are included
+        let start = cal.date(byAdding: .hour, value: -6, to: cal.startOfDay(for: Date()))!
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: Date())
+        let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
+        let query = HKSampleQuery(sampleType: type, predicate: predicate,
+                                  limit: HKObjectQueryNoLimit, sortDescriptors: [sort]) { _, samples, _ in
+            let asleepValues = Set(HKCategoryValueSleepAnalysis.allAsleepValues.map(\.rawValue))
+            let stageValues: Set<Int> = [HKCategoryValueSleepAnalysis.asleepCore.rawValue,
+                                         HKCategoryValueSleepAnalysis.asleepDeep.rawValue,
+                                         HKCategoryValueSleepAnalysis.asleepREM.rawValue]
+            let asleep = (samples as? [HKCategorySample] ?? []).filter { asleepValues.contains($0.value) }
+
+            // If iPhone + Watch (+ Oura) all recorded the night, use only the most detailed source
+            func seconds(_ list: [HKCategorySample]) -> Double {
+                list.reduce(0) { $0 + $1.endDate.timeIntervalSince(max($1.startDate, start)) }
+            }
+            let bySource = Dictionary(grouping: asleep) { $0.sourceRevision.source.bundleIdentifier }
+            let best = bySource.values.max { a, b in
+                (seconds(a.filter { stageValues.contains($0.value) }), seconds(a)) <
+                (seconds(b.filter { stageValues.contains($0.value) }), seconds(b))
+            } ?? []
+            let total = seconds(best)
+
             DispatchQueue.main.async {
-                let sleepSamples = samples as? [HKCategorySample] ?? []
-                let asleep = sleepSamples.filter {
-                    $0.value == HKCategoryValueSleepAnalysis.asleepCore.rawValue ||
-                    $0.value == HKCategoryValueSleepAnalysis.asleepDeep.rawValue ||
-                    $0.value == HKCategoryValueSleepAnalysis.asleepREM.rawValue ||
-                    $0.value == HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue
-                }
-                let total = asleep.reduce(0.0) { $0 + $1.endDate.timeIntervalSince($1.startDate) }
                 self.sleepHours = total / 3600
                 self.sleepMinutes = Int((total / 60).truncatingRemainder(dividingBy: 60))
             }
