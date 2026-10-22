@@ -20,6 +20,7 @@ struct SavedRecipe: Codable, Identifiable {
     var lines: [RecipeLine] = []
     var tags: [String] = []
     var imageData: Data?
+    var extraImages: [Data] = []      // more screenshots/photos of the same recipe
     var createdAt: Date = Date()
     var note: String = ""
     var isFavorite: Bool = false
@@ -32,6 +33,8 @@ struct SavedRecipe: Codable, Identifiable {
     }
     var keptText: String { keptLines.joined(separator: "\n") }
     var image: UIImage? { imageData.flatMap { UIImage(data: $0) } }
+    /// Every photo of this recipe, first one first.
+    var images: [UIImage] { ([imageData].compactMap { $0 } + extraImages).compactMap { UIImage(data: $0) } }
     var parsed: RecipeParser.Parsed { RecipeParser.parse(keptLines) }
 
     var displayTitle: String {
@@ -46,15 +49,15 @@ struct SavedRecipe: Codable, Identifiable {
     }
 
     init(id: UUID = UUID(), title: String = "", rawText: String, lines: [RecipeLine] = [],
-         tags: [String] = [], imageData: Data? = nil, createdAt: Date = Date(),
+         tags: [String] = [], imageData: Data? = nil, extraImages: [Data] = [], createdAt: Date = Date(),
          note: String = "", isFavorite: Bool = false) {
         self.id = id; self.title = title; self.rawText = rawText; self.lines = lines
-        self.tags = tags; self.imageData = imageData; self.createdAt = createdAt
+        self.tags = tags; self.imageData = imageData; self.extraImages = extraImages; self.createdAt = createdAt
         self.note = note; self.isFavorite = isFavorite
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, title, rawText, lines, tags, imageData, createdAt, note, isFavorite
+        case id, title, rawText, lines, tags, imageData, extraImages, createdAt, note, isFavorite
     }
 
     // Tolerant decoding — also reads items saved by the earlier "receipt" version.
@@ -65,6 +68,7 @@ struct SavedRecipe: Codable, Identifiable {
         rawText    = try c.decodeIfPresent(String.self, forKey: .rawText) ?? ""
         tags       = try c.decodeIfPresent([String].self, forKey: .tags) ?? []
         imageData  = try c.decodeIfPresent(Data.self, forKey: .imageData)
+        extraImages = (try? c.decodeIfPresent([Data].self, forKey: .extraImages)) ?? []
         createdAt  = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         note       = try c.decodeIfPresent(String.self, forKey: .note) ?? ""
         isFavorite = try c.decodeIfPresent(Bool.self, forKey: .isFavorite) ?? false
@@ -178,6 +182,36 @@ struct RecipeParser {
             }
         }
         return lines.prefix(10).first(where: { ok($0) && $0.lowercased() != "saved" }) ?? ""
+    }
+
+    /// Joins the text of several screenshots into one list, in order.
+    /// Screenshots usually overlap, so lines already seen at the end of the previous page are skipped,
+    /// and the phone's status bar at the top of later pages (e.g. "10:28") is dropped.
+    static func mergePages(_ pages: [[String]]) -> [String] {
+        func key(_ s: String) -> String {
+            s.lowercased().unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }.map(String.init).joined()
+        }
+        var merged: [String] = []
+        for (index, raw) in pages.enumerated() {
+            var page = raw.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            if index > 0 {
+                // Drop status-bar bits (clock, tiny fragments) from the top of later screenshots
+                while let first = page.first, page.count > 1,
+                      match(timeRegex, first) != nil || key(first).count <= 3 { page.removeFirst() }
+            }
+            // Find the longest stretch where the end of what we have equals the start of this page
+            let tail = Array(merged.suffix(40)).map(key)
+            let head = page.map(key)
+            var overlap = 0
+            if !tail.isEmpty && !head.isEmpty {
+                for k in stride(from: min(tail.count, head.count), through: 1, by: -1)
+                where Array(tail.suffix(k)) == Array(head.prefix(k)) {
+                    overlap = k; break
+                }
+            }
+            merged += page.dropFirst(overlap)
+        }
+        return merged
     }
 
     static func downscaled(_ image: UIImage, maxSide: CGFloat = 1600) -> UIImage {

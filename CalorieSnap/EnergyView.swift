@@ -35,6 +35,68 @@ struct EnergyDay: Identifiable {
     var hasStages: Bool { deep + rem > 0 }
 }
 
+/// One workout from Apple Health (Apple Watch, Oura, Strava, gym apps…).
+struct WorkoutEntry: Identifiable {
+    let id: UUID
+    let start: Date
+    let minutes: Double
+    let activity: HKWorkoutActivityType
+    let kcal: Double?
+    let avgHeartRate: Double?
+    let distanceKm: Double?
+    let source: String
+
+    var name: String { WorkoutEntry.name(for: activity) }
+    var icon: String { WorkoutEntry.icon(for: activity) }
+
+    static func name(for t: HKWorkoutActivityType) -> String {
+        switch t {
+        case .running: return "Running"
+        case .walking: return "Walking"
+        case .hiking: return "Hiking"
+        case .cycling: return "Cycling"
+        case .swimming: return "Swimming"
+        case .traditionalStrengthTraining, .functionalStrengthTraining: return "Strength training"
+        case .highIntensityIntervalTraining: return "HIIT"
+        case .coreTraining: return "Core training"
+        case .yoga: return "Yoga"
+        case .pilates: return "Pilates"
+        case .elliptical: return "Elliptical"
+        case .rowing: return "Rowing"
+        case .stairClimbing, .stairs, .stepTraining: return "Stairs"
+        case .dance, .cardioDance, .socialDance: return "Dance"
+        case .mixedCardio: return "Cardio"
+        case .flexibility, .cooldown, .preparationAndRecovery, .mindAndBody: return "Stretching & recovery"
+        case .tennis, .badminton, .tableTennis, .pickleball: return "Racket sports"
+        case .kickboxing, .boxing, .martialArts: return "Boxing & martial arts"
+        default: return "Workout"
+        }
+    }
+
+    static func icon(for t: HKWorkoutActivityType) -> String {
+        switch t {
+        case .running: return "figure.run"
+        case .walking: return "figure.walk"
+        case .hiking: return "figure.hiking"
+        case .cycling: return "figure.outdoor.cycle"
+        case .swimming: return "figure.pool.swim"
+        case .traditionalStrengthTraining, .functionalStrengthTraining: return "figure.strengthtraining.traditional"
+        case .highIntensityIntervalTraining: return "figure.highintensity.intervaltraining"
+        case .coreTraining: return "figure.core.training"
+        case .yoga: return "figure.yoga"
+        case .pilates: return "figure.pilates"
+        case .elliptical: return "figure.elliptical"
+        case .rowing: return "figure.rower"
+        case .stairClimbing, .stairs, .stepTraining: return "figure.stairs"
+        case .dance, .cardioDance, .socialDance: return "figure.dance"
+        case .flexibility, .cooldown, .preparationAndRecovery, .mindAndBody: return "figure.flexibility"
+        case .tennis, .badminton, .tableTennis, .pickleball: return "figure.tennis"
+        case .kickboxing, .boxing, .martialArts: return "figure.boxing"
+        default: return "figure.mixed.cardio"
+        }
+    }
+}
+
 struct EnergyScore {
     var sleep: Int?
     var hrv: Int?          // HRV relative to baseline
@@ -100,6 +162,7 @@ final class EnergyStore: ObservableObject {
     @Published private(set) var ouraSleep: [Date: OuraSleepDay] = [:]
     @Published private(set) var ouraError: String?
     @Published private(set) var ringBattery: OuraBattery?
+    @Published private(set) var workouts: [WorkoutEntry] = []      // newest first, last 30 days
 
     private let health = HKHealthStore()
     private let cal = Calendar.current
@@ -112,6 +175,9 @@ final class EnergyStore: ObservableObject {
             HKQuantityType(.restingHeartRate),
             HKQuantityType(.stepCount),
             HKQuantityType(.appleExerciseTime),
+            HKObjectType.workoutType(),
+            HKQuantityType(.heartRate),
+            HKQuantityType(.activeEnergyBurned),
         ]
     }
 
@@ -172,6 +238,7 @@ final class EnergyStore: ObservableObject {
         }
 
         await loadOura(start: start, end: end)
+        workouts = await fetchWorkouts(days: 30)
 
         days = built
         scores = Self.computeScores(
@@ -228,6 +295,36 @@ final class EnergyStore: ObservableObject {
 
     /// Oura's readiness details for the given day, if any.
     func ouraDetails(for day: Date) -> OuraReadinessDay? { ouraReadiness[day] }
+
+    // MARK: Workouts
+
+    private func fetchWorkouts(days: Int) async -> [WorkoutEntry] {
+        let start = cal.date(byAdding: .day, value: -days, to: Date()) ?? Date()
+        let descriptor = HKSampleQueryDescriptor(
+            predicates: [.workout(HKQuery.predicateForSamples(withStart: start, end: Date()))],
+            sortDescriptors: [SortDescriptor(\.startDate, order: .reverse)]
+        )
+        guard let results = try? await descriptor.result(for: health) else { return [] }
+        let bpm = HKUnit.count().unitDivided(by: .minute())
+        return results.map { w in
+            WorkoutEntry(
+                id: w.uuid,
+                start: w.startDate,
+                minutes: w.duration / 60,
+                activity: w.workoutActivityType,
+                kcal: w.statistics(for: HKQuantityType(.activeEnergyBurned))?.sumQuantity()?.doubleValue(for: .kilocalorie()),
+                avgHeartRate: w.statistics(for: HKQuantityType(.heartRate))?.averageQuantity()?.doubleValue(for: bpm),
+                distanceKm: w.totalDistance.map { $0.doubleValue(for: .meterUnit(with: .kilo)) },
+                source: w.sourceRevision.source.name
+            )
+        }
+    }
+
+    /// Workouts in the last `days` days (newest first).
+    func recentWorkouts(days: Int) -> [WorkoutEntry] {
+        let start = cal.date(byAdding: .day, value: -days, to: cal.startOfDay(for: Date())) ?? Date()
+        return workouts.filter { $0.start >= start }
+    }
 
     // MARK: HealthKit queries
 
@@ -491,6 +588,7 @@ struct EnergyDetailView: View {
                 heroCard
                 ouraSection
                 metricsGrid
+                workoutsSection
                 sleepChart
                 explainer
             }
@@ -675,6 +773,61 @@ struct EnergyDetailView: View {
         return LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
             ForEach(tiles) { MetricTile(data: $0) }
         }
+    }
+
+    // MARK: Workouts
+
+    private var workoutsSection: some View {
+        let week = store.recentWorkouts(days: 7)
+        let minutes = week.reduce(0) { $0 + $1.minutes }
+        let kcal = week.compactMap(\.kcal).reduce(0, +)
+        let list = Array(store.workouts.prefix(10))
+
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Workouts").font(.headline)
+                    Text("From Apple Health").font(.caption2).foregroundStyle(.secondary)
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("\(Int(minutes.rounded())) min").font(.system(.title3, design: .monospaced)).fontWeight(.semibold)
+                    Text("\(week.count) workout\(week.count == 1 ? "" : "s") · \(Int(kcal)) kcal this week")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+
+            if list.isEmpty {
+                Text("No workouts in the last 30 days. Workouts you record on Apple Watch, Oura or apps like Strava appear here.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                ForEach(list) { w in
+                    HStack(spacing: 12) {
+                        Image(systemName: w.icon)
+                            .font(.body)
+                            .foregroundStyle(.orange)
+                            .frame(width: 34, height: 34)
+                            .background(Color.orange.opacity(0.12))
+                            .clipShape(RoundedRectangle(cornerRadius: 9))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(w.name).font(.subheadline).fontWeight(.medium)
+                            Text(w.start.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute()))
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Text("\(Int(w.minutes.rounded())) min").font(.subheadline).fontWeight(.semibold)
+                            Text([w.kcal.map { "\(Int($0)) kcal" },
+                                  w.avgHeartRate.map { "\(Int($0)) bpm" },
+                                  w.distanceKm.flatMap { $0 > 0.05 ? String(format: "%.1f km", $0) : nil }]
+                                .compactMap { $0 }.joined(separator: " · "))
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+        }
+        .energyCardStyle()
     }
 
     // MARK: Sleep chart

@@ -90,17 +90,17 @@ struct ContentView: View {
     @StateObject private var todoStore = TodoStore()
     @State private var selectedTab: Int = 0
     @Environment(\.scenePhase) private var scenePhase
+    @ObservedObject private var lock = AppLock.shared
 
     var body: some View {
         ZStack(alignment: .bottom) {
             Group {
                 switch selectedTab {
                 case 0: DashboardView(financeStore: financeStore, calendarStore: calendarStore, todoStore: todoStore)
-                case 1: KitchenView()
+                case 1: KitchenView()          // Fridge + Recipes
                 case 2: CalendarView(store: calendarStore)
                 case 3: FinanceView(store: financeStore)
                 case 4: ProfileView()
-                case 5: ReceiptsView()
                 default: DashboardView(financeStore: financeStore, calendarStore: calendarStore, todoStore: todoStore)
                 }
             }
@@ -109,7 +109,7 @@ struct ContentView: View {
 
             HStack(spacing: 0) {
                 CustomTabItem(icon: "flame.fill",        label: "Today",    tag: 0, selected: $selectedTab)
-                CustomTabItem(icon: "fork.knife", label: "Kitchen", tag: 1, selected: $selectedTab)
+                CustomTabItem(icon: "fork.knife",        label: "Kitchen",  tag: 1, selected: $selectedTab)
                 CustomTabItem(icon: "calendar",          label: "Calendar", tag: 2, selected: $selectedTab)
                 CustomTabItem(icon: "dollarsign.circle", label: "Finance",  tag: 3, selected: $selectedTab)
                 CustomTabItem(icon: "person.circle",     label: "Profile",  tag: 4, selected: $selectedTab)
@@ -119,7 +119,20 @@ struct ContentView: View {
             .overlay(Divider(), alignment: .top)
         }
         .ignoresSafeArea(edges: .bottom)
+        // Face ID lock: covers everything while locked, and in the app switcher
+        .overlay {
+            if lock.isEnabled && (lock.isLocked || scenePhase != .active) {
+                AppLockScreen(lock: lock).transition(.opacity)
+            }
+        }
+        .task { await lock.unlock() }
+        // First launch: offer to turn on Face ID straight away
+        .fullScreenCover(isPresented: Binding(get: { lock.showSetup }, set: { _ in })) {
+            AppLockSetupView(lock: lock)
+        }
         .onChange(of: scenePhase) { _, phase in
+            lock.sceneChanged(phase)
+            // Daily automatic backup (only if a backup folder was chosen in Profile → Backup & Restore)
             if phase == .active || phase == .background { KellyBackup.autoBackupIfNeeded() }
         }
     }
@@ -290,10 +303,15 @@ struct DashboardView: View {
                             }
                             .padding(.horizontal)
                         }
+
                         // Energy score (Oura-style, from Apple Health)
                         EnergyCard()
                             .padding(.horizontal)
-                        
+
+                        // On-device AI suggestions (Apple Intelligence)
+                        AIAssistantCard(financeStore: financeStore)
+                            .padding(.horizontal)
+
                         // Exercise bonus
                         if healthKit.isAuthorized && healthKit.activeCalories > 0 {
                             HStack(spacing: 8) {

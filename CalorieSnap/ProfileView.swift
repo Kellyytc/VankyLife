@@ -425,6 +425,10 @@ struct ProfileView: View {
 
                     if selectedTab == .wishes { wishSection } else { achievementSection }
 
+                    // Face ID lock
+                    AppLockSettingsCard()
+                        .padding(.horizontal)
+
                     // Backup & Restore
                     NavigationLink(destination: BackupView()) {
                         HStack(spacing: 12) {

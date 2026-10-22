@@ -203,6 +203,10 @@ struct RecipeDetailView: View {
 
     @State private var showEdit = false
     @State private var showImage = false
+    @State private var photoIndex = 0
+    @State private var addItems: [PhotosPickerItem] = []
+    @State private var isAdding = false
+    @State private var addMessage: String?
     @State private var showLines = false
     @State private var confirmDelete = false
     @State private var checkedIngredients: Set<Int> = []
@@ -214,17 +218,28 @@ struct RecipeDetailView: View {
         if let r = recipe {
             let parsed = r.parsed
             List {
-                if let img = r.image {
+                let photos = r.images
+                if !photos.isEmpty {
                     Section {
-                        Button { showImage = true } label: {
-                            Image(uiImage: img)
-                                .resizable().scaledToFit()
-                                .frame(maxWidth: .infinity, maxHeight: 260)
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                        TabView(selection: $photoIndex) {
+                            ForEach(Array(photos.enumerated()), id: \.offset) { i, img in
+                                Button { photoIndex = i; showImage = true } label: {
+                                    Image(uiImage: img)
+                                        .resizable().scaledToFit()
+                                        .frame(maxWidth: .infinity, maxHeight: 260)
+                                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                                }
+                                .buttonStyle(.plain)
+                                .tag(i)
+                            }
                         }
-                        .buttonStyle(.plain)
+                        .tabViewStyle(.page(indexDisplayMode: photos.count > 1 ? .always : .never))
+                        .indexViewStyle(.page(backgroundDisplayMode: .always))
+                        .frame(height: 280)
                     } footer: {
-                        Text("Tap the photo to zoom in and select text.")
+                        Text(photos.count > 1
+                             ? "\(photos.count) photos. Swipe to see them all; tap one to zoom in and select text."
+                             : "Tap the photo to zoom in and select text.")
                     }
                     .listRowBackground(Color.clear)
                 }
@@ -313,10 +328,20 @@ struct RecipeDetailView: View {
                     } label: {
                         Label("Choose text to keep", systemImage: "text.badge.checkmark")
                     }
+                    PhotosPicker(selection: $addItems, maxSelectionCount: 10, matching: .images) {
+                        HStack {
+                            Label("Add screenshots", systemImage: "plus.viewfinder")
+                            if isAdding { Spacer(); ProgressView() }
+                        }
+                    }
+                    .disabled(isAdding)
+                    if let addMessage {
+                        Text(addMessage).font(.footnote).foregroundStyle(.green)
+                    }
                 } header: {
                     Text("Text")
                 } footer: {
-                    Text("\(r.lines.filter(\.kept).count) of \(r.lines.count) lines kept. Press and hold the text to copy it.")
+                    Text("\(r.lines.filter(\.kept).count) of \(r.lines.count) lines kept. Recipe too long for one screenshot? Tap Add screenshots to read the rest and add it to the end.")
                 }
 
                 Section {
@@ -353,7 +378,12 @@ struct RecipeDetailView: View {
                 }
             }
             .fullScreenCover(isPresented: $showImage) {
-                if let img = r.image { RecipeImageViewer(image: img) }
+                let photos = r.images
+                if photos.indices.contains(photoIndex) { RecipeImageViewer(image: photos[photoIndex]) }
+            }
+            .onChange(of: addItems) { _, items in
+                guard !items.isEmpty else { return }
+                Task { await addScreenshots(items) }
             }
         } else {
             ContentUnavailableView("Recipe not found", systemImage: "fork.knife")
@@ -361,7 +391,75 @@ struct RecipeDetailView: View {
     }
 }
 
-// MARK: - New recipe (typed in by hand, optional photo)
+extension RecipeDetailView {
+    /// Reads the picked screenshots and adds their text (minus any overlap) to the end of the recipe.
+    @MainActor
+    func addScreenshots(_ items: [PhotosPickerItem]) async {
+        isAdding = true
+        addMessage = nil
+        defer { isAdding = false; addItems = [] }
+
+        var images: [UIImage] = []
+        for item in items {
+            if let data = try? await item.loadTransferable(type: Data.self), let img = UIImage(data: data) {
+                images.append(img)
+            }
+        }
+        guard !images.isEmpty, var r = store.recipes.first(where: { $0.id == recipeID }) else { return }
+
+        var pages: [[String]] = []
+        for img in images { pages.append(await RecipeOCR.lines(in: img)) }
+
+        let existing = r.keptLines.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        let merged = RecipeParser.mergePages([existing] + pages)
+        let added = Array(merged.dropFirst(existing.count))
+
+        r.lines += added.map { RecipeLine(text: $0) }
+        r.rawText = r.keptText
+        var newData = images.map { RecipeParser.downscaled($0, maxSide: 1200).jpegData(compressionQuality: 0.5) }.compactMap { $0 }
+        if r.imageData == nil, !newData.isEmpty { r.imageData = newData.removeFirst() }
+        r.extraImages += newData
+        store.update(r)
+        checkedIngredients = []
+        addMessage = added.isEmpty
+            ? "Added \(images.count) photo\(images.count == 1 ? "" : "s"). No new text found."
+            : "Added \(added.count) lines from \(images.count) screenshot\(images.count == 1 ? "" : "s")."
+    }
+}
+
+// MARK: - Text recognition
+
+enum RecipeOCR {
+    /// Reads the text in a photo, top to bottom. English and Chinese.
+    static func lines(in image: UIImage) async -> [String] {
+        guard let cg = image.cgImage else { return [] }
+        let orientation = cgOrientation(image.imageOrientation)
+        return await Task.detached(priority: .userInitiated) {
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = .accurate
+            request.usesLanguageCorrection = true
+            request.recognitionLanguages = ["en-US", "zh-Hans", "zh-Hant"]
+            try? VNImageRequestHandler(cgImage: cg, orientation: orientation, options: [:]).perform([request])
+            return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+        }.value
+    }
+
+    static func cgOrientation(_ o: UIImage.Orientation) -> CGImagePropertyOrientation {
+        switch o {
+        case .up: return .up
+        case .down: return .down
+        case .left: return .left
+        case .right: return .right
+        case .upMirrored: return .upMirrored
+        case .downMirrored: return .downMirrored
+        case .leftMirrored: return .leftMirrored
+        case .rightMirrored: return .rightMirrored
+        @unknown default: return .up
+        }
+    }
+}
+
+// MARK: - New recipe (typed in by hand, optional photos)
 
 struct NewRecipeView: View {
     let existingTags: [String]
@@ -374,8 +472,8 @@ struct NewRecipeView: View {
     @State private var newTag = ""
     @State private var ingredients = ""
     @State private var steps = ""
-    @State private var photoItem: PhotosPickerItem?
-    @State private var photo: UIImage?
+    @State private var photoItems: [PhotosPickerItem] = []
+    @State private var photos: [UIImage] = []
     @State private var isReading = false
     @State private var readMessage: String?
 
@@ -395,35 +493,42 @@ struct NewRecipeView: View {
         NavigationStack {
             Form {
                 Section {
-                    if let photo {
-                        Image(uiImage: photo)
-                            .resizable().scaledToFit()
-                            .frame(maxWidth: .infinity, maxHeight: 200)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                            .listRowBackground(Color.clear)
+                    if !photos.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 10) {
+                                ForEach(Array(photos.enumerated()), id: \.offset) { _, img in
+                                    Image(uiImage: img)
+                                        .resizable().scaledToFit()
+                                        .frame(height: 160)
+                                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                                }
+                            }
+                        }
+                        .listRowBackground(Color.clear)
                     }
-                    PhotosPicker(selection: $photoItem, matching: .images) {
-                        Label(photo == nil ? "Add a photo" : "Change photo", systemImage: "photo")
+                    PhotosPicker(selection: $photoItems, maxSelectionCount: 10, matching: .images) {
+                        Label(photos.isEmpty ? "Add photos" : "Change photos", systemImage: "photo.on.rectangle")
                     }
-                    if photo != nil {
+                    if !photos.isEmpty {
                         Button {
-                            Task { await readTextFromPhoto() }
+                            Task { await readTextFromPhotos() }
                         } label: {
                             HStack {
-                                Label("Read text from photo", systemImage: "text.viewfinder")
+                                Label(photos.count > 1 ? "Read text from \(photos.count) photos" : "Read text from photo",
+                                      systemImage: "text.viewfinder")
                                 if isReading { Spacer(); ProgressView() }
                             }
                         }
                         .disabled(isReading)
-                        Button("Remove photo", role: .destructive) { photo = nil; photoItem = nil }
+                        Button("Remove photos", role: .destructive) { photos = []; photoItems = [] }
                     }
                 } header: {
-                    Text("Photo (optional)")
+                    Text("Photos (optional)")
                 } footer: {
                     if let readMessage {
                         Text(readMessage)
                     } else {
-                        Text("Add a photo of the dish, or of a recipe page and tap Read text from photo to fill in the boxes below.")
+                        Text("Add a photo of the dish, or up to 10 screenshots of a long recipe in order, then tap Read text to fill in the boxes below.")
                     }
                 }
 
@@ -472,13 +577,16 @@ struct NewRecipeView: View {
                     Button("Save") { save() }.fontWeight(.semibold).disabled(!canSave)
                 }
             }
-            .onChange(of: photoItem) { _, item in
-                guard let item else { return }
+            .onChange(of: photoItems) { _, items in
                 Task {
-                    if let data = try? await item.loadTransferable(type: Data.self), let img = UIImage(data: data) {
-                        photo = img
-                        readMessage = nil
+                    var loaded: [UIImage] = []
+                    for item in items {
+                        if let data = try? await item.loadTransferable(type: Data.self), let img = UIImage(data: data) {
+                            loaded.append(img)
+                        }
                     }
+                    photos = loaded
+                    readMessage = nil
                 }
             }
         }
@@ -531,43 +639,24 @@ struct NewRecipeView: View {
             rawText: all.joined(separator: "\n"),
             lines: all.map { RecipeLine(text: $0) },
             tags: tags,
-            imageData: photo.flatMap { RecipeParser.downscaled($0).jpegData(compressionQuality: 0.6) },
+            imageData: photos.first.flatMap { RecipeParser.downscaled($0).jpegData(compressionQuality: 0.6) },
+            extraImages: photos.dropFirst().compactMap { RecipeParser.downscaled($0, maxSide: 1200).jpegData(compressionQuality: 0.5) },
             note: note.trimmingCharacters(in: .whitespacesAndNewlines)
         )
         onSave(recipe)
         dismiss()
     }
 
-    private static func cgOrientation(_ o: UIImage.Orientation) -> CGImagePropertyOrientation {
-        switch o {
-        case .up: return .up
-        case .down: return .down
-        case .left: return .left
-        case .right: return .right
-        case .upMirrored: return .upMirrored
-        case .downMirrored: return .downMirrored
-        case .leftMirrored: return .leftMirrored
-        case .rightMirrored: return .rightMirrored
-        @unknown default: return .up
-        }
-    }
-
-    /// Reads the text in the photo and sorts it into ingredients and steps.
-    private func readTextFromPhoto() async {
-        guard let image = photo, let cg = image.cgImage else { return }
-        let orientation = Self.cgOrientation(image.imageOrientation)
+    /// Reads the text in every photo, joins the pages in order, and sorts it into ingredients and steps.
+    private func readTextFromPhotos() async {
+        guard !photos.isEmpty else { return }
         isReading = true
         defer { isReading = false }
-        let lines: [String] = await Task.detached(priority: .userInitiated) {
-            let request = VNRecognizeTextRequest()
-            request.recognitionLevel = .accurate
-            request.usesLanguageCorrection = true
-            request.recognitionLanguages = ["en-US", "zh-Hans", "zh-Hant"]
-            try? VNImageRequestHandler(cgImage: cg, orientation: orientation, options: [:]).perform([request])
-            return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
-        }.value
+        var pages: [[String]] = []
+        for img in photos { pages.append(await RecipeOCR.lines(in: img)) }
+        let lines = RecipeParser.mergePages(pages)
 
-        guard !lines.isEmpty else { readMessage = "No text found in this photo."; return }
+        guard !lines.isEmpty else { readMessage = "No text found in the photos."; return }
         let parsed = RecipeParser.parse(lines)
         if title.isEmpty { title = RecipeParser.detectTitle(in: lines) }
         if parsed.isEmpty {
@@ -576,7 +665,7 @@ struct NewRecipeView: View {
         } else {
             if !parsed.ingredients.isEmpty { ingredients = parsed.ingredients.joined(separator: "\n") }
             if !parsed.steps.isEmpty { steps = parsed.steps.joined(separator: "\n") }
-            readMessage = "Found \(parsed.ingredients.count) ingredients and \(parsed.steps.count) steps. Check them before saving."
+            readMessage = "Found \(parsed.ingredients.count) ingredients and \(parsed.steps.count) steps\(photos.count > 1 ? " across \(photos.count) photos" : ""). Check them before saving."
         }
     }
 }
