@@ -312,6 +312,18 @@ struct RecipeDetailView: View {
                     }
                 }
 
+                if !parsed.tips.isEmpty {
+                    Section("Tips") {
+                        ForEach(Array(parsed.tips.enumerated()), id: \.offset) { _, tip in
+                            Label {
+                                Text(tip)
+                            } icon: {
+                                Image(systemName: "lightbulb").foregroundStyle(.yellow)
+                            }
+                        }
+                    }
+                }
+
                 Section {
                     if parsed.isEmpty || showFullText {
                         Text(r.keptText.isEmpty ? "No text kept" : r.keptText)
@@ -684,6 +696,7 @@ struct NewRecipeView: View {
         } else {
             if !parsed.ingredients.isEmpty { ingredients = parsed.ingredients.joined(separator: "\n") }
             if !parsed.steps.isEmpty { steps = parsed.steps.joined(separator: "\n") }
+            if !parsed.tips.isEmpty && note.isEmpty { note = parsed.tips.joined(separator: " ") }
             readMessage = "Found \(parsed.ingredients.count) ingredients and \(parsed.steps.count) steps\(photos.count > 1 ? " across \(photos.count) photos" : ""). Check them before saving."
         }
     }

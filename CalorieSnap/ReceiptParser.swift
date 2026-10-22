@@ -98,6 +98,7 @@ struct RecipeParser {
     struct Parsed {
         var ingredients: [String] = []
         var steps: [String] = []
+        var tips: [String] = []
         var isEmpty: Bool { ingredients.isEmpty && steps.isEmpty }
     }
 
@@ -115,7 +116,7 @@ struct RecipeParser {
         pattern: #"^\s*第\s*(\d{1,2}|[一二三四五六七八九十]+)\s*步\s*[:：、.]?\s*(.+)$"#)
     // "1 后油后盐…" / "5二发…" — a number with no punctuation (how emoji numbers like 1️⃣ get read)
     private static let looseStepRegex = try! NSRegularExpression(
-        pattern: #"^\s*(\d{1,2})\s*[|｜]?\s*(?![\d.,/:：])(\D.*)$"#)
+        pattern: #"^\s*(\d{1,2})\s*[|｜]?\s*(?![\d.,/:：\-–~～%])(\D.*)$"#)
     // "- 60g milk", "• 2 eggs"
     private static let bulletRegex = try! NSRegularExpression(
         pattern: #"^\s*[-•*·▪◦]\s*(.+)$"#)
@@ -124,9 +125,9 @@ struct RecipeParser {
     private static let quantityRegex = try! NSRegularExpression(
         pattern: #"^\s*(\d+(?:[./]\d+)?|½|¼|¾|⅓|一|两|半)\s*("# + units + #")(?![A-Za-z])"#,
         options: .caseInsensitive)
-    // "高筋粉 430g", "鸡蛋 2个", "Flour 200 g", "盐 适量", "salt to taste"
+    // "高筋粉 430g", "高筋面粉 500", "鸡蛋1个（约50g）", "牛奶 200g (预留20g)", "Flour 200 g", "盐 适量", "salt to taste"
     private static let trailingQuantityRegex = try! NSRegularExpression(
-        pattern: #"^\s*\D.{0,30}?\s*(?:(\d+(?:[./]\d+)?|½|¼|¾|⅓|一|两|半)\s*(?:"# + units + #")|适量|少许|若干|少量|to taste|a pinch|pinch)\s*[,，;；]?\s*$"#,
+        pattern: #"^\s*[^\d\s][^\d]{0,20}?\s*(?:(?:\d+(?:[./]\d+)?|½|¼|¾|⅓|一|两|半)\s*(?:"# + units + #")?|适量|少许|若干|少量|to taste|a pinch|pinch)\s*(?:[（(][^)）]*[)）]?)?\s*[,，;；。]?\s*$"#,
         options: .caseInsensitive)
     // "Ingredients", "Method", "做法:" …
     private static let headerRegex = try! NSRegularExpression(
@@ -194,7 +195,9 @@ struct RecipeParser {
 
     // MARK: Line kinds
 
-    enum Heading: Equatable { case ingredients, steps, group(String) }
+    enum Heading: Equatable { case ingredients, steps, tips, group(String) }
+
+    private static let tipWords = ["tips", "tip", "notes", "note", "小贴士", "贴士", "小提示", "提示", "注意", "注意事项", "备注", "心得", "tips & tricks"]
 
     static func heading(_ line: String) -> Heading? {
         var t = line.trimmingCharacters(in: .whitespaces)
@@ -207,6 +210,7 @@ struct RecipeParser {
         let lower = t.lowercased()
         if stepWords.contains(lower) || (marked && stepWords.contains { lower.contains($0) }) { return .steps }
         if ingredientWords.contains(lower) || (marked && ingredientWords.contains { lower.contains($0) }) { return .ingredients }
+        if tipWords.contains(lower) || (marked && tipWords.contains { lower.contains($0) }) { return .tips }
         if marked, !t.isEmpty, t.count <= 14, t.rangeOfCharacter(from: .decimalDigits) == nil { return .group(t) }
         return nil
     }
@@ -240,7 +244,7 @@ struct RecipeParser {
     /// "Ingredients" / "【面团】" / "【制作过程】", emoji step numbers, and amounts written
     /// before or after the ingredient name. Wrapped step lines are joined back together.
     static func parse(_ rawLines: [String]) -> Parsed {
-        enum Section { case unknown, ingredients, steps }
+        enum Section { case unknown, ingredients, steps, tips }
         var result = Parsed()
         var section = Section.unknown
         var lastWasStep = false
@@ -260,6 +264,7 @@ struct RecipeParser {
                 switch h {
                 case .steps: section = .steps
                 case .ingredients: section = .ingredients
+                case .tips: section = .tips
                 case .group(let name):
                     if section == .steps && lastWasStep { break }
                     section = .ingredients
@@ -267,6 +272,10 @@ struct RecipeParser {
                 }
                 lastWasStep = false
                 continue
+            }
+
+            if section == .tips {
+                result.tips.append(line); continue
             }
 
             if section == .steps {
