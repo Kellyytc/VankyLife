@@ -368,7 +368,7 @@ struct RecipeParser {
     /// - pieces on the same row are joined left-to-right (e.g. "1️⃣" + "后油后盐…")
     /// - on phone screenshots, the app header and bottom bar are ignored
     /// - lines that wrap to the next row are joined back together
-    static func assembleLines(_ boxes: [TextBox], isScreenshot: Bool) -> [String] {
+    static func assembleLines(_ boxes: [TextBox], isScreenshot: Bool, joinWrapped: Bool = true) -> [String] {
         var items = boxes.filter { !$0.text.trimmingCharacters(in: .whitespaces).isEmpty }
         if isScreenshot { items = items.filter { $0.midY > 0.12 && $0.midY < 0.9 } }
         items.sort { $0.midY < $1.midY }
@@ -390,9 +390,10 @@ struct RecipeParser {
 
         var out: [(text: String, maxX: Double)] = []
         for row in built {
-            let text = normalize(row.text)
-            if isJunk(text) { continue }
-            if let prev = out.last, prev.maxX >= max(rightEdge - 0.06, 0.75), prev.text.count >= 8,
+            // Recipes: tidy up and drop screen clutter. Statements (joinWrapped == false): keep every row as read.
+            let text = joinWrapped ? normalize(row.text) : row.text
+            if joinWrapped && isJunk(text) { continue }
+            if joinWrapped, let prev = out.last, prev.maxX >= max(rightEdge - 0.06, 0.75), prev.text.count >= 8,
                !startsNewItem(text), !isJunk(prev.text) {
                 out[out.count - 1] = (joinText(prev.text, text), row.maxX)
             } else {

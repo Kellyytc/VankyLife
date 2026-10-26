@@ -84,11 +84,27 @@ class TodoStore: ObservableObject {
 
 // MARK: - Content View
 
+extension ContentView {
+    /// Opens the import preview for a statement the share extension saved for Finance.
+    func openPendingStatement() {
+        guard sharedStatement == nil, let url = PendingStatements.next() else { return }
+        selectedTab = 3
+        sharedStatement = SharedStatement(url: url)
+    }
+}
+
+/// A file opened in Kelly Life from the share sheet.
+struct SharedStatement: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
 struct ContentView: View {
     @StateObject private var financeStore = FinanceStore()
     @StateObject private var calendarStore = CalendarStore()
     @StateObject private var todoStore = TodoStore()
     @State private var selectedTab: Int = 0
+    @State private var sharedStatement: SharedStatement?
     @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var lock = AppLock.shared
 
@@ -134,6 +150,22 @@ struct ContentView: View {
             lock.sceneChanged(phase)
             // Daily automatic backup (only if a backup folder was chosen in Profile → Backup & Restore)
             if phase == .active || phase == .background { KellyBackup.autoBackupIfNeeded() }
+            // Pick up purchases added by the Wallet automation while the app was closed
+            if phase == .active { financeStore.load(); openPendingStatement() }
+        }
+        // A bank statement (CSV or PDF) shared to Kelly Life from Mail, Files or a bank app
+        .onOpenURL { url in
+            guard url.isFileURL, ["csv", "pdf", "tsv", "txt"].contains(url.pathExtension.lowercased()) else { return }
+            selectedTab = 3
+            sharedStatement = SharedStatement(url: url)
+        }
+        .sheet(item: $sharedStatement) { file in
+            ImportTransactionsView(store: financeStore, initialURL: file.url)
+        }
+        // A statement shared with the KellyLifeShare extension
+        .task { openPendingStatement() }
+        .onReceive(NotificationCenter.default.publisher(for: PurchaseLogger.didAddPurchase)) { _ in
+            financeStore.load()
         }
     }
 }

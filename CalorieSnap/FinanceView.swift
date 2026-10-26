@@ -847,7 +847,7 @@ class FinanceStore: ObservableObject {
 // MARK: - Period
 
 enum FinancePeriod {
-    case week, month, year, weekOffset(Int), monthOffset(Int)
+    case week, month, year, weekOffset(Int), monthOffset(Int), yearOffset(Int)
 
     var startDate: Date {
         let cal = Calendar.current; let now = Date()
@@ -861,6 +861,9 @@ enum FinancePeriod {
         case .monthOffset(let n):
             let d = cal.date(byAdding: .month, value: n, to: now) ?? now
             return cal.dateInterval(of: .month, for: d)?.start ?? d
+        case .yearOffset(let n):
+            let d = cal.date(byAdding: .year, value: n, to: now) ?? now
+            return cal.dateInterval(of: .year, for: d)?.start ?? d
         }
     }
     var endDate: Date {
@@ -875,9 +878,29 @@ enum FinancePeriod {
         case .monthOffset(let n):
             let d = cal.date(byAdding: .month, value: n, to: now) ?? now
             return cal.dateInterval(of: .month, for: d)?.end ?? d
+        case .yearOffset(let n):
+            let d = cal.date(byAdding: .year, value: n, to: now) ?? now
+            return cal.dateInterval(of: .year, for: d)?.end ?? d
         }
     }
     func contains(_ date: Date) -> Bool { date >= startDate && date < endDate }
+
+    /// "Oct 20 – 26, 2026", "October 2026" or "2026".
+    var title: String {
+        let start = startDate
+        let last = Calendar.current.date(byAdding: .day, value: -1, to: endDate) ?? endDate
+        switch self {
+        case .week, .weekOffset:
+            let sameMonth = Calendar.current.isDate(start, equalTo: last, toGranularity: .month)
+            let from = start.formatted(.dateTime.month(.abbreviated).day())
+            let to = sameMonth ? last.formatted(.dateTime.day()) : last.formatted(.dateTime.month(.abbreviated).day())
+            return "\(from) – \(to), \(last.formatted(.dateTime.year()))"
+        case .month, .monthOffset:
+            return start.formatted(.dateTime.month(.wide).year())
+        case .year, .yearOffset:
+            return start.formatted(.dateTime.year())
+        }
+    }
 }
 
 // MARK: - Finance View
@@ -885,8 +908,10 @@ enum FinancePeriod {
 struct FinanceView: View {
     @ObservedObject var store: FinanceStore   // ← injected, not @StateObject
     @State private var selectedPeriod: PeriodTab = .month
+    @State private var periodOffset = 0          // 0 = this week/month/year, -1 = the one before…
     @State private var showAddTransaction = false
     @State private var showBudgetSettings = false
+    @State private var showImport = false
     @State private var selectedTab: FinanceTab = .overview
 
     enum PeriodTab: String, CaseIterable {
@@ -898,7 +923,9 @@ struct FinanceView: View {
 
     var period: FinancePeriod {
         switch selectedPeriod {
-        case .week: return .week; case .month: return .month; case .year: return .year
+        case .week: return .weekOffset(periodOffset)
+        case .month: return .monthOffset(periodOffset)
+        case .year: return .yearOffset(periodOffset)
         }
     }
 
@@ -908,6 +935,10 @@ struct FinanceView: View {
                 Picker("Period", selection: $selectedPeriod) {
                     ForEach(PeriodTab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }.pickerStyle(.segmented).padding(.horizontal).padding(.top, 8)
+                .onChange(of: selectedPeriod) { _, _ in periodOffset = 0 }
+
+                PeriodNavigator(kind: selectedPeriod, offset: $periodOffset)
+                    .padding(.horizontal).padding(.top, 6)
 
                 SummaryBanner(store: store, period: period)
                     .padding(.horizontal).padding(.top, 12)
@@ -949,6 +980,9 @@ struct FinanceView: View {
                         Button(action: { showAddTransaction = true }) {
                             Label("Add Transaction", systemImage: "plus")
                         }
+                        Button(action: { showImport = true }) {
+                            Label("Import from Bank CSV", systemImage: "tray.and.arrow.down")
+                        }
                         Button(action: { showBudgetSettings = true }) {
                             Label("Set Budget", systemImage: "target")
                         }
@@ -957,7 +991,68 @@ struct FinanceView: View {
             }
             .sheet(isPresented: $showAddTransaction) { AddTransactionView(store: store) }
             .sheet(isPresented: $showBudgetSettings) { BudgetSettingsView(store: store) }
+            .sheet(isPresented: $showImport) { ImportTransactionsView(store: store) }
         }
+    }
+}
+
+// MARK: - Choose which week / month / year
+
+struct PeriodNavigator: View {
+    let kind: FinanceView.PeriodTab
+    @Binding var offset: Int
+
+    private func period(_ n: Int) -> FinancePeriod {
+        switch kind {
+        case .week: return .weekOffset(n)
+        case .month: return .monthOffset(n)
+        case .year: return .yearOffset(n)
+        }
+    }
+    private var currentLabel: String {
+        switch kind { case .week: return "This week"; case .month: return "This month"; case .year: return "This year" }
+    }
+    private var pickCount: Int {
+        switch kind { case .week: return 26; case .month: return 24; case .year: return 6 }
+    }
+
+    var body: some View {
+        HStack {
+            Button { offset -= 1 } label: {
+                Image(systemName: "chevron.left").font(.headline).frame(width: 36, height: 32)
+            }
+            Spacer()
+            Menu {
+                ForEach(0..<pickCount, id: \.self) { i in
+                    Button {
+                        offset = -i
+                    } label: {
+                        if -i == offset { Label(period(-i).title, systemImage: "checkmark") }
+                        else { Text(period(-i).title) }
+                    }
+                }
+            } label: {
+                VStack(spacing: 1) {
+                    Text(period(offset).title).font(.subheadline).fontWeight(.semibold)
+                    if offset == 0 {
+                        Text(currentLabel).font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+                .foregroundStyle(.primary)
+            }
+            Spacer()
+            if offset != 0 {
+                Button("Today") { offset = 0 }.font(.caption)
+            }
+            Button { offset += 1 } label: {
+                Image(systemName: "chevron.right").font(.headline).frame(width: 36, height: 32)
+            }
+            .disabled(offset >= 0)
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 6)
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 }
 
@@ -1585,16 +1680,27 @@ struct TrendChart: View {
 struct BudgetTab: View {
     @ObservedObject var store: FinanceStore; let period: FinancePeriod
     @State private var showBudgetSettings = false
+    /// Budgets are monthly: show the month being viewed (or this month when viewing a week or year).
+    private var budgetPeriod: FinancePeriod {
+        switch period {
+        case .month, .monthOffset: return period
+        default: return .month
+        }
+    }
     var body: some View {
         VStack(spacing: 16) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Text("Overall Monthly Budget").font(.headline); Spacer()
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Overall Monthly Budget").font(.headline)
+                        Text(budgetPeriod.title).font(.caption).foregroundColor(.secondary)
+                    }
+                    Spacer()
                     Button(action: { showBudgetSettings = true }) { Image(systemName: "pencil.circle").foregroundColor(.green) }
                 }
                 if store.overallMonthlyBudget > 0 {
-                    let spent = store.monthSpent(); let budget = store.overallMonthlyBudget
-                    let remaining = store.monthBudgetRemaining(); let isOver = remaining < 0
+                    let spent = store.totalExpense(for: budgetPeriod); let budget = store.overallMonthlyBudget
+                    let remaining = budget - spent; let isOver = remaining < 0
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Spent").font(.caption).foregroundColor(.secondary)
@@ -1621,7 +1727,7 @@ struct BudgetTab: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Category Budgets (Optional)").font(.headline)
                     ForEach(store.budgetGoals.sorted(by: { $0.key.rawValue < $1.key.rawValue }), id: \.key) { category, limit in
-                        let spent = store.expenseByCategory(for: .month).first(where: { $0.category == category })?.amount ?? 0
+                        let spent = store.expenseByCategory(for: budgetPeriod).first(where: { $0.category == category })?.amount ?? 0
                         BudgetProgressRow(category: category, spent: spent, limit: limit)
                     }
                 }.padding().background(.regularMaterial).cornerRadius(16)

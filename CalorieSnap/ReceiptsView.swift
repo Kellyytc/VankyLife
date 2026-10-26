@@ -449,7 +449,7 @@ extension RecipeDetailView {
 
 enum RecipeOCR {
     /// Reads the text in a photo, top to bottom. English and Chinese.
-    static func lines(in image: UIImage) async -> [String] {
+    static func lines(in image: UIImage, joinWrapped: Bool = true, skipScreenBars: Bool = true) async -> [String] {
         guard let cg = image.cgImage else { return [] }
         let orientation = cgOrientation(image.imageOrientation)
         let boxes = await Task.detached(priority: .userInitiated) {
@@ -468,7 +468,7 @@ enum RecipeOCR {
         }.value
         // Tall images are phone screenshots: skip the app's header and bottom bar
         let isScreenshot = image.size.height / max(image.size.width, 1) >= 1.9
-        return RecipeParser.assembleLines(boxes, isScreenshot: isScreenshot)
+        return RecipeParser.assembleLines(boxes, isScreenshot: isScreenshot && skipScreenBars, joinWrapped: joinWrapped)
     }
 
     static func cgOrientation(_ o: UIImage.Orientation) -> CGImagePropertyOrientation {
