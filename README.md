@@ -33,15 +33,21 @@ A personal health & lifestyle iOS app built with SwiftUI — designed around one
 - Goal-weight plan with app-calculated timeline, milestones and calorie targets
 - Answers questions across sleep, energy, HRV, steps, workouts, weight, food, recipes, fridge, cycle, calendar, countdowns, to-dos, wishes, stocks, CDs and spending, with real numbers shown first
 - Money snapshot where the app computes every number (stocks vs CDs, top holdings, groups, CD maturities) and the AI only adds observations
+- "How are my stocks today?": live index moves (S&P 500, Nasdaq, Dow, TSX), your day's gain/loss per holding, and news for the biggest movers
+- Ask about one stock (e.g. "NVDA?") for today's move, your position, gain since buying and recent headlines
+- CD maturities with days left and expected interest; spending totals with a month-end forecast
+- Follow-up questions remember the topic; general questions get a plain answer without unrelated data
 - Latest headlines for the stocks you own
 
 ### 🍳 Kitchen — Fridge & Recipes
 **Recipes**
 - Save recipes from any app's share sheet (share extension) or add them manually
-- On-device text recognition (English & Chinese) from screenshots
-- Long recipes: combine up to 10 screenshots, overlaps removed automatically
+- On-device text recognition (Chinese & English) from screenshots and PDFs
+- Long recipes: combine up to 10 screenshots, overlaps and cut-off lines handled automatically
+- Understands Xiaohongshu-style recipes: 【section】 headings, emoji step numbers (1️⃣), amounts before or after the name, and app buttons/like counts are ignored
+- Title guessed from the post or its best-matching hashtag
 - Pick which lines to keep, add a title, note and tags
-- Ingredients with checkboxes and numbered steps; edit, favourite or delete anytime
+- Ingredients (grouped by section) with checkboxes, numbered steps and a Tips section (小贴士); edit, favourite or delete anytime
 
 **Fridge**
 - Track items across Fridge, Freezer and Storage
@@ -63,9 +69,22 @@ A personal health & lifestyle iOS app built with SwiftUI — designed around one
 - Weight logging per day
 
 ### 💰 Finance
+**Four ways to add purchases**
+1. **Apple Pay, automatic** — a Shortcuts "Transaction" automation runs the app's *Log Purchase* action after every Apple Pay tap; the shop name, amount and card are saved and the category is guessed
+2. **Share a statement** — Share a PDF or CSV statement (Amex, Mail, Files…) → Kelly Life → *Import to Finance*; the preview opens next time the app is opened
+3. **Import a file** — Finance → + → Import from Bank CSV (PDF or CSV)
+4. **By hand** — Finance → + → Add Transaction
+
+**Statement import**
+- Reads CSV downloads from most banks and cards (Chase, Amex, Capital One, Citi, BofA, Discover, Apple Card, RBC, TD, Scotiabank…) and PDF statements, including scanned ones
+- Preview before importing: pick rows, change categories, swap purchases/refunds
+- Skips card payments and purchases already in the app (same day, same amount, matching name)
+
+**Tracking**
 - Transaction tracking with income and expense categories
+- Choose which week, month or year to view (‹ › or tap the date to jump back)
 - Cumulative amount entry (add multiple items into one transaction)
-- Monthly budget with category breakdown and progress bar
+- Monthly budget with category breakdown and progress bar (follows the month you're viewing)
 - Stock portfolio with live prices via Yahoo Finance (auto-refresh every 5 min)
 - Stock chart with buy/sell markers
 - CD (Certificate of Deposit) accounts with maturity countdown
@@ -91,6 +110,8 @@ A personal health & lifestyle iOS app built with SwiftUI — designed around one
 | **Health Data** | HealthKit |
 | **Wearable** | Oura API v2 |
 | **AI** | Apple Foundation Models (on-device) |
+| **Automation** | App Intents + Shortcuts (Apple Pay "Transaction" trigger) |
+| **Statements** | PDFKit + Vision text recognition |
 | **Text Recognition** | Vision & VisionKit |
 | **Security** | LocalAuthentication (Face ID), Keychain |
 | **Calendar Data** | EventKit |
@@ -116,6 +137,7 @@ A personal health & lifestyle iOS app built with SwiftUI — designed around one
 - **Apple Health** — steps, sleep, active calories, heart rate, HRV, resting heart rate, workouts, menstrual cycle data
 - **Face ID** — to lock the app
 - **Photos** — to read recipe screenshots
+- **Shortcuts** — a personal automation for logging Apple Pay purchases (optional)
 - **Apple Calendar** — read your calendar events to show alongside health data
 
 ---
@@ -146,6 +168,17 @@ A personal health & lifestyle iOS app built with SwiftUI — designed around one
 7. To use Oura, register an app at the Oura developer portal and enter its Client ID and Secret in the app
 8. Build and run on your device (`Cmd + R`)
 
+### Apple Pay auto-logging (optional)
+1. Open **Shortcuts** → tap **+** to make a new shortcut
+2. Add the trigger **When Any Card is tapped** (Transaction) and turn off **Notify**
+3. Add the action **Log Purchase in Kelly Life** and set:
+   - **Amount** → Transaction › Amount
+   - **Merchant** → Transaction › Merchant
+   - **Card** → Transaction › Card or Pass
+4. Each Apple Pay payment is then added to Finance automatically. Card swipes, online card-number purchases and cash still need importing or adding by hand.
+
+> Apple's FinanceKit (direct Wallet access) is only available to finance apps on the App Store, so this app uses the Shortcuts automation instead.
+
 ---
 
 ## Project Structure
@@ -163,20 +196,22 @@ CalorieSnap/
 ├── ReceiptStore.swift      — Recipe storage in the App Group (shared)
 ├── AppLock.swift           — Face ID lock
 ├── BackupView.swift        — Backup & restore (OneDrive / iCloud Drive)
-├── FinanceView.swift       — Transactions, stocks, CDs, budget
+├── FinanceView.swift       — Transactions, stocks, CDs, budget, week/month/year navigation
+├── ImportTransactionsView.swift — Bank statement import (CSV & PDF), shared-statement pickup
+├── PurchaseIntent.swift    — "Log Purchase in Kelly Life" Shortcuts action for Apple Pay
 ├── FridgeView.swift        — Fridge/freezer/storage tracker
 ├── ProfileView.swift       — Profile, year wish list
 ├── HealthKitManager.swift  — Apple Health integration
 └── Info.plist              — App permissions
 KellyLifeShare/
-└── ShareViewController.swift — Share extension for saving recipes
+└── ShareViewController.swift — Share extension: saves recipes, hands bank statements to Finance
 ```
 
 ---
 
 ## Data Privacy
 
-All data is stored **locally on device**. There's no Kelly Life server. Stock prices and headlines come from Yahoo Finance's public endpoints; Oura data is fetched directly from Oura with your own sign-in, and its tokens are kept in the Keychain. Kelly AI runs entirely on-device. Backups go only to the OneDrive or iCloud Drive location you choose. Apple Health and Calendar data is read-only.
+All data is stored **locally on device**. There's no Kelly Life server. Stock prices and headlines come from Yahoo Finance's public endpoints; Oura data is fetched directly from Oura with your own sign-in, and its tokens are kept in the Keychain. Kelly AI runs entirely on-device. Apple Pay purchases are passed from Shortcuts straight into the app, and imported statements are read on the phone and deleted after import. Backups go only to the OneDrive or iCloud Drive location you choose. Apple Health and Calendar data is read-only.
 
 ---
 
