@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import HealthKit
 
 // MARK: - To-Do Models
 
@@ -103,6 +104,133 @@ extension ContentView {
     }
 }
 
+// MARK: - Last night's sleep
+
+/// Reads last night's sleep from Apple Health like the Health app does:
+/// one device only (Apple Watch first), asleep stages only (not "in bed" or awake),
+/// and overlapping samples counted once.
+enum LastNightSleep {
+    struct Result { let hours: Double; let source: String
+        var text: String { let m = Int((hours * 60).rounded()); return "\(m / 60)h \(m % 60)m" }
+    }
+
+    /// Everything Apple Health has for last night, per device (for the "Sleep details" check screen).
+    static func details() async -> [String] {
+        guard HKHealthStore.isHealthDataAvailable() else { return ["Apple Health isn't available."] }
+        let store = HKHealthStore()
+        let cal = Calendar.current
+        let start = cal.date(bySettingHour: 18, minute: 0, second: 0, of: cal.date(byAdding: .day, value: -1, to: Date())!)!
+        let descriptor = HKSampleQueryDescriptor(
+            predicates: [.categorySample(type: HKCategoryType(.sleepAnalysis),
+                                         predicate: HKQuery.predicateForSamples(withStart: start, end: Date()))],
+            sortDescriptors: [SortDescriptor(\.startDate)])
+        guard let samples = try? await descriptor.result(for: store), !samples.isEmpty else { return ["No sleep data since 6 pm yesterday."] }
+        func name(_ v: Int) -> String {
+            switch HKCategoryValueSleepAnalysis(rawValue: v) {
+            case .inBed: return "In bed"
+            case .awake: return "Awake"
+            case .asleepCore: return "Core"
+            case .asleepDeep: return "Deep"
+            case .asleepREM: return "REM"
+            default: return "Asleep (no stage)"
+            }
+        }
+        var out: [String] = []
+        let bySource = Dictionary(grouping: samples) { $0.sourceRevision.source.bundleIdentifier }
+        for (id, list) in bySource.sorted(by: { $0.key < $1.key }) {
+            let source = list.first?.sourceRevision.source.name ?? id
+            let device = list.first?.device?.model ?? ""
+            out.append("■ \(source)\(device.isEmpty ? "" : " (\(device))")")
+            if let first = list.map(\.startDate).min(), let last = list.map(\.endDate).max() {
+                out.append("  \(first.formatted(date: .abbreviated, time: .shortened)) → \(last.formatted(date: .omitted, time: .shortened))")
+            }
+            let byValue = Dictionary(grouping: list, by: \.value)
+            for (value, items) in byValue.sorted(by: { $0.key < $1.key }) {
+                let minutes = Int(items.reduce(0) { $0 + $1.endDate.timeIntervalSince($1.startDate) } / 60)
+                out.append("  \(name(value)): \(minutes / 60)h \(minutes % 60)m (\(items.count) pieces)")
+            }
+        }
+        if let r = await read() { out.insert("Kelly Life uses: \(r.source), \(r.text)", at: 0) }
+        return out
+    }
+
+    static func read() async -> Result? {
+        guard HKHealthStore.isHealthDataAvailable() else { return nil }
+        let store = HKHealthStore()
+        let cal = Calendar.current
+        // From 6 pm yesterday until now: covers a normal night and an early bedtime
+        let start = cal.date(bySettingHour: 18, minute: 0, second: 0, of: cal.date(byAdding: .day, value: -1, to: Date())!)!
+        let descriptor = HKSampleQueryDescriptor(
+            predicates: [.categorySample(type: HKCategoryType(.sleepAnalysis),
+                                         predicate: HKQuery.predicateForSamples(withStart: start, end: Date()))],
+            sortDescriptors: [SortDescriptor(\.startDate)])
+        guard let samples = try? await descriptor.result(for: store), !samples.isEmpty else { return nil }
+
+        let stages: Set<Int> = [HKCategoryValueSleepAnalysis.asleepCore.rawValue,
+                                HKCategoryValueSleepAnalysis.asleepDeep.rawValue,
+                                HKCategoryValueSleepAnalysis.asleepREM.rawValue]
+        let unspecified = HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue
+        let asleep = samples.filter { stages.contains($0.value) || $0.value == unspecified }
+        let bySource = Dictionary(grouping: asleep) { $0.sourceRevision.source.bundleIdentifier }
+
+        func total(_ list: [HKCategorySample]) -> Double {
+            // Use stages when the device recorded them; never count overlapping minutes twice
+            var use = list
+            if use.contains(where: { stages.contains($0.value) }) { use = use.filter { stages.contains($0.value) } }
+            use.sort { $0.startDate < $1.startDate }
+            var seconds = 0.0
+            var coveredUntil = Date.distantPast
+            for s in use {
+                let from = max(s.startDate, coveredUntil)
+                if s.endDate > from { seconds += s.endDate.timeIntervalSince(from); coveredUntil = s.endDate }
+            }
+            return seconds / 3600
+        }
+        func isWatch(_ id: String) -> Bool { id.hasPrefix("com.apple.health") }
+
+        // Apple Watch first (that's what the Health app shows), otherwise the device with the most detail
+        var bestID: String?
+        var bestHours = 0.0
+        var bestScore = -1.0
+        for (id, list) in bySource {
+            let hours = total(list)
+            if hours < 0.5 { continue }
+            let staged = list.contains(where: { sample in stages.contains(sample.value) })
+            var score = hours
+            if staged { score += 100 }
+            if staged && isWatch(id) { score += 1000 }
+            if score > bestScore { bestScore = score; bestHours = hours; bestID = id }
+        }
+        guard let id = bestID else { return nil }
+        let name = isWatch(id) ? "Watch" : (bySource[id]?.first?.sourceRevision.source.name ?? "Health")
+        return Result(hours: bestHours, source: name.contains("Oura") ? "Oura" : name)
+    }
+}
+
+/// Tap the Sleep box: shows what each device recorded last night.
+struct SleepDetailsSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var lines: [String] = ["Reading Apple Health…"]
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                        Text(line).font(.system(.footnote, design: .monospaced))
+                            .fontWeight(line.hasPrefix("■") || line.hasPrefix("Kelly") ? .semibold : .regular)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding()
+            }
+            .navigationTitle("Last night's sleep")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .task { lines = await LastNightSleep.details() }
+        }
+    }
+}
+
 /// A file opened in Kelly Life from the share sheet.
 struct SharedStatement: Identifiable {
     let id = UUID()
@@ -168,7 +296,11 @@ struct ContentView: View {
             // Daily automatic backup (only if a backup folder was chosen in Profile → Backup & Restore)
             if phase == .active || phase == .background { KellyBackup.autoBackupIfNeeded() }
             // Pick up purchases added by the Wallet automation while the app was closed
-            if phase == .active { financeStore.load(); openPendingStatement() }
+            if phase == .active {
+                financeStore.load(); openPendingStatement()
+                // Your watch/ring often syncs last night's sleep after you wake up, so check again
+                Task { await EnergyStore.shared.loadIfStale(maxAge: 120) }
+            }
         }
         // A bank statement (CSV or PDF) shared to Kelly Life from Mail, Files or a bank app
         .onOpenURL { url in
@@ -212,6 +344,9 @@ struct DashboardView: View {
     @ObservedObject var financeStore: FinanceStore
     @ObservedObject var calendarStore: CalendarStore
     @ObservedObject var todoStore: TodoStore
+    /// Last night's sleep, read straight from Apple Health the way the Health app counts it.
+    @State private var lastNight: LastNightSleep.Result?
+    @State private var showSleepDetails = false
 
     @AppStorage("totalCalories") var totalCalories: Int = 0
     @AppStorage("totalCarbs") var totalCarbs: Double = 0
@@ -453,7 +588,10 @@ struct DashboardView: View {
                                         .padding(.horizontal, 12).padding(.vertical, 6)
                                         .background(Color.red).cornerRadius(10)
                                 } else {
-                                    Button(action: { healthKit.fetchAll() }) {
+                                    Button(action: {
+                                        healthKit.fetchAll()
+                                        Task { lastNight = await LastNightSleep.read(); await EnergyStore.shared.load() }
+                                    }) {
                                         Image(systemName: "arrow.clockwise").foregroundColor(.secondary)
                                     }
                                 }
@@ -493,7 +631,11 @@ struct DashboardView: View {
                                 .padding(10).background(Color.green.opacity(0.06)).cornerRadius(10)
                                 Divider()
                                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                                    HealthStatCard(icon: "moon.zzz.fill", label: "Sleep", value: healthKit.sleepFormatted, color: .purple, goalMet: healthKit.sleepGoalMet)
+                                    HealthStatCard(icon: "moon.zzz.fill", label: lastNight.map { "Sleep · \($0.source)" } ?? "Sleep",
+                                                   value: lastNight?.text ?? "—", color: .purple, goalMet: (lastNight?.hours ?? 0) >= 7)
+                                        .task { lastNight = await LastNightSleep.read() }
+                                        .onTapGesture { showSleepDetails = true }
+                                        .sheet(isPresented: $showSleepDetails) { SleepDetailsSheet() }
                                     HealthStatCard(icon: "flame.fill", label: "Active Cal", value: "\(Int(healthKit.activeCalories)) kcal", color: .orange, goalMet: healthKit.activeCalories > 300)
                                     if healthKit.heartRate > 0 {
                                         HealthStatCard(icon: "heart.fill", label: "Heart Rate", value: "\(Int(healthKit.heartRate)) bpm", color: .red, goalMet: healthKit.heartRate < 100)
@@ -524,6 +666,7 @@ struct DashboardView: View {
                 .offset(x: dragOffset)
                 .refreshable {
                     healthKit.fetchAll(); recentMeals = ManualMeal.loadAll()
+                    Task { lastNight = await LastNightSleep.read(); await EnergyStore.shared.loadIfStale(maxAge: 120) }
                     financeStore.refreshAll(); weightLogs = WeightLog.loadAll()
                 }
 
