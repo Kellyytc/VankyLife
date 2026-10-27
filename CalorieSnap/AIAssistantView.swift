@@ -579,7 +579,7 @@ final class KellyAI: ObservableObject {
     private var session: LanguageModelSession?
     private var instructions = ""
     private let finance: FinanceStore
-    private let energy = EnergyStore()
+    private let energy = EnergyStore.shared
     private var energyLoaded = false
     private var lastTurn: KellyBrain.Turn?
 
@@ -1053,7 +1053,7 @@ final class KellyAI: ObservableObject {
 
     private func loadEnergyIfNeeded() async {
         guard !energyLoaded else { return }
-        await energy.load()
+        await energy.loadIfStale()
         energyLoaded = true
     }
 

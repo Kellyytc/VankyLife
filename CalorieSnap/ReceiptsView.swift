@@ -146,6 +146,21 @@ struct RecipesView: View {
 
 // MARK: - Row
 
+/// Small, cached thumbnails so the recipe list doesn't decode full-size photos on every redraw.
+enum RecipeThumbnails {
+    private static let cache = NSCache<NSString, UIImage>()
+
+    static func thumbnail(for recipe: SavedRecipe) -> UIImage? {
+        guard let data = recipe.imageData else { return nil }
+        let key = "\(recipe.id.uuidString)-\(data.count)" as NSString
+        if let hit = cache.object(forKey: key) { return hit }
+        guard let full = UIImage(data: data) else { return nil }
+        let thumb = full.preparingThumbnail(of: CGSize(width: 168, height: 168)) ?? full
+        cache.setObject(thumb, forKey: key)
+        return thumb
+    }
+}
+
 struct RecipeRow: View {
     let recipe: SavedRecipe
 
@@ -153,7 +168,7 @@ struct RecipeRow: View {
         let parsed = recipe.parsed
         HStack(spacing: 12) {
             Group {
-                if let img = recipe.image {
+                if let img = RecipeThumbnails.thumbnail(for: recipe) {
                     Image(uiImage: img).resizable().scaledToFill()
                 } else {
                     Image(systemName: "fork.knife").font(.title3).foregroundStyle(.secondary)

@@ -35,7 +35,7 @@ struct SavedRecipe: Codable, Identifiable {
     var image: UIImage? { imageData.flatMap { UIImage(data: $0) } }
     /// Every photo of this recipe, first one first.
     var images: [UIImage] { ([imageData].compactMap { $0 } + extraImages).compactMap { UIImage(data: $0) } }
-    var parsed: RecipeParser.Parsed { RecipeParser.parse(keptLines) }
+    var parsed: RecipeParser.Parsed { RecipeParser.cachedParse(id: id, lines: keptLines) }
 
     var displayTitle: String {
         let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -239,6 +239,18 @@ struct RecipeParser {
     }
 
     // MARK: Parse
+
+    /// Parsing is regex-heavy, so results are remembered until the recipe's text changes.
+    nonisolated(unsafe) private static var parseCache: [String: Parsed] = [:]
+
+    static func cachedParse(id: UUID, lines: [String]) -> Parsed {
+        let key = "\(id.uuidString)|\(lines.joined(separator: "\n").hashValue)"
+        if let hit = parseCache[key] { return hit }
+        let result = parse(lines)
+        if parseCache.count > 300 { parseCache.removeAll() }
+        parseCache[key] = result
+        return result
+    }
 
     /// Splits recipe text into ingredients and steps. Understands section headings like
     /// "Ingredients" / "【面团】" / "【制作过程】", emoji step numbers, and amounts written

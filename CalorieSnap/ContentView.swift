@@ -85,6 +85,16 @@ class TodoStore: ObservableObject {
 // MARK: - Content View
 
 extension ContentView {
+    @ViewBuilder
+    func tabContent(_ tag: Int) -> some View {
+        switch tag {
+        case 1: KitchenView()          // Fridge + Recipes
+        case 2: CalendarView(store: calendarStore)
+        case 3: FinanceView(store: financeStore)
+        default: ProfileView()
+        }
+    }
+
     /// Opens the import preview for a statement the share extension saved for Finance.
     func openPendingStatement() {
         guard sharedStatement == nil, let url = PendingStatements.next() else { return }
@@ -104,22 +114,29 @@ struct ContentView: View {
     @StateObject private var calendarStore = CalendarStore()
     @StateObject private var todoStore = TodoStore()
     @State private var selectedTab: Int = 0
+    @State private var openedTabs: Set<Int> = []
     @State private var sharedStatement: SharedStatement?
     @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var lock = AppLock.shared
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            Group {
-                switch selectedTab {
-                case 0: DashboardView(financeStore: financeStore, calendarStore: calendarStore, todoStore: todoStore)
-                case 1: KitchenView()          // Fridge + Recipes
-                case 2: CalendarView(store: calendarStore)
-                case 3: FinanceView(store: financeStore)
-                case 4: ProfileView()
-                default: DashboardView(financeStore: financeStore, calendarStore: calendarStore, todoStore: todoStore)
+            // Today is rebuilt each time (so it refreshes); the other tabs stay loaded after
+            // their first visit, so switching back to them is instant.
+            ZStack {
+                if selectedTab == 0 {
+                    DashboardView(financeStore: financeStore, calendarStore: calendarStore, todoStore: todoStore)
+                }
+                ForEach([1, 2, 3, 4], id: \.self) { tag in
+                    if openedTabs.contains(tag) || selectedTab == tag {
+                        tabContent(tag)
+                            .opacity(selectedTab == tag ? 1 : 0)
+                            .allowsHitTesting(selectedTab == tag)
+                            .accessibilityHidden(selectedTab != tag)
+                    }
                 }
             }
+            .onChange(of: selectedTab) { _, tab in openedTabs.insert(tab) }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.bottom, 60)
 

@@ -198,6 +198,16 @@ final class EnergyStore: ObservableObject {
 
     // MARK: Loading
 
+    /// One store for the whole app (Today card, Energy page, Kelly AI), so data loads once.
+    static let shared = EnergyStore()
+    private(set) var lastLoaded: Date?
+
+    /// Reloads only if the data is older than `maxAge` seconds (default 10 minutes).
+    func loadIfStale(maxAge: TimeInterval = 600) async {
+        if let last = lastLoaded, Date().timeIntervalSince(last) < maxAge, hasLoaded { return }
+        await load()
+    }
+
     func load() async {
         guard !isLoading else { return }
         guard HKHealthStore.isHealthDataAvailable() else {
@@ -205,7 +215,7 @@ final class EnergyStore: ObservableObject {
             return
         }
         isLoading = true
-        defer { isLoading = false; hasLoaded = true }
+        defer { isLoading = false; hasLoaded = true; lastLoaded = Date() }
 
         do {
             try await health.requestAuthorization(toShare: [], read: readTypes)
@@ -460,7 +470,7 @@ final class EnergyStore: ObservableObject {
 // MARK: - Today card
 
 struct EnergyCard: View {
-    @StateObject private var store = EnergyStore()
+    @ObservedObject private var store = EnergyStore.shared
 
     var body: some View {
         NavigationLink {
@@ -524,7 +534,7 @@ struct EnergyCard: View {
             .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.primary.opacity(0.06)))
         }
         .buttonStyle(.plain)
-        .task { await store.load() }
+        .task { await store.loadIfStale() }
     }
 
     private func isToday(_ d: Date) -> Bool { Calendar.current.isDateInToday(d) }
