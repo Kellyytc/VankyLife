@@ -2,53 +2,13 @@ import AppIntents
 import Foundation
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Log Wallet purchases automatically.
+// Apple Pay purchases → Finance.
 //
-// Adds a "Log Purchase in Kelly Life" action to the Shortcuts app. Pair it with
-// a Shortcuts "Transaction" automation (runs every time you pay with Apple Pay)
-// and each tap is saved as an expense in the Finance tab, with a category
-// guessed from the shop name.
-// Main app target only.
+// The "Log Purchase in Kelly Life" Shortcuts action now lives in the
+// KellyLifeIntents extension (so it works without opening the app). It leaves each
+// purchase in the App Group; mergePending() moves them into Finance when Kelly
+// Life opens. Main app target only.
 // ─────────────────────────────────────────────────────────────────────────────
-
-struct LogPurchaseIntent: AppIntent {
-    static let title: LocalizedStringResource = "Log Purchase in Kelly Life"
-    static let description = IntentDescription("Saves a purchase as an expense in Kelly Life's Finance tab.")
-    static let openAppWhenRun = false
-
-    @Parameter(title: "Amount", description: "For example $12.50")
-    var amount: String
-
-    @Parameter(title: "Merchant")
-    var merchant: String?
-
-    @Parameter(title: "Card")
-    var card: String?
-
-    static var parameterSummary: some ParameterSummary {
-        Summary("Log \(\.$amount) at \(\.$merchant)") {
-            \.$card
-        }
-    }
-
-    @MainActor
-    func perform() async throws -> some IntentResult {
-        guard let value = PurchaseLogger.parseAmount(amount), value != 0 else { return .result() }
-        PurchaseLogger.add(amount: value, merchant: merchant ?? "", card: card ?? "")
-        return .result()
-    }
-}
-
-struct KellyLifeShortcuts: AppShortcutsProvider {
-    static var appShortcuts: [AppShortcut] {
-        AppShortcut(
-            intent: LogPurchaseIntent(),
-            phrases: ["Log a purchase in \(.applicationName)"],
-            shortTitle: "Log Purchase",
-            systemImageName: "creditcard"
-        )
-    }
-}
 
 // MARK: - Saving
 
@@ -56,6 +16,18 @@ struct KellyLifeShortcuts: AppShortcutsProvider {
 enum PurchaseLogger {
     static let didAddPurchase = Notification.Name("KellyLife.didAddPurchase")
     private static let key = "financeTransactions"
+
+    /// Adds purchases the Shortcuts action saved while Kelly Life was closed.
+    static func mergePending() {
+        guard let shared = UserDefaults(suiteName: "group.com.kelly.kellylife"),
+              let waiting = shared.array(forKey: "pendingPurchases") as? [[String: Any]], !waiting.isEmpty else { return }
+        shared.removeObject(forKey: "pendingPurchases")
+        for item in waiting {
+            guard let text = item["amount"] as? String, let value = parseAmount(text), value != 0 else { continue }
+            let when = (item["date"] as? Double).map { Date(timeIntervalSince1970: $0) } ?? Date()
+            add(amount: value, merchant: item["merchant"] as? String ?? "", card: item["card"] as? String ?? "", date: when)
+        }
+    }
 
     /// Reads "$12.34", "CA$1,234.56", "12,34 €", "-5.00" and similar.
     nonisolated static func parseAmount(_ text: String) -> Double? {

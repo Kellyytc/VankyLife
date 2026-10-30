@@ -297,6 +297,8 @@ struct ContentView: View {
             if phase == .active || phase == .background { KellyBackup.autoBackupIfNeeded() }
             // Pick up purchases added by the Wallet automation while the app was closed
             if phase == .active {
+                PurchaseLogger.mergePending()          // Apple Pay purchases from the Shortcuts automation
+                Task { await ShopLocation.shared.refreshNearby() }   // nearest branches for shopping lists
                 financeStore.load(); openPendingStatement()
                 // Your watch/ring often syncs last night's sleep after you wake up, so check again
                 Task { await EnergyStore.shared.loadIfStale(maxAge: 120) }
@@ -312,7 +314,11 @@ struct ContentView: View {
             ImportTransactionsView(store: financeStore, initialURL: file.url)
         }
         // A statement shared with the KellyLifeShare extension
-        .task { openPendingStatement() }
+        .task {
+            PurchaseLogger.mergePending(); financeStore.load(); openPendingStatement()
+            _ = ShoppingStore.shared
+            ShopLocation.shared.resume()
+        }
         .onReceive(NotificationCenter.default.publisher(for: PurchaseLogger.didAddPurchase)) { _ in
             financeStore.load()
         }

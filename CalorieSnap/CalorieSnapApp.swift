@@ -9,6 +9,7 @@ import SwiftUI
 
 @main
 struct CalorieSnapApp: App {
+    init() { ShopLocation.shared.resume() }
     var body: some Scene {
         WindowGroup {
             ContentView()

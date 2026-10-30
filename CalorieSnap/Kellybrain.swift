@@ -423,10 +423,19 @@ enum KellyFacts {
         return IntentFacts(intent: .recipes, lines: lines, hasData: true)
     }
 
+    /// What's on the Kitchen → Shopping lists, one line per store.
+    static func shoppingLines() -> [String] {
+        ShoppingStore.shared.lists.filter { !$0.openItems.isEmpty }.map { list in
+            "Shopping list \(list.emoji) \(list.name): " + list.openItems.prefix(10).map(\.name).joined(separator: ", ")
+        }
+    }
+
     static func fridge() -> IntentFacts {
         let items = FridgeReader.items()
         guard !items.isEmpty else {
-            return IntentFacts(intent: .fridge, lines: ["Your fridge list is empty. Add items in Kitchen → Fridge."], hasData: false)
+            let shopping = shoppingLines()
+            return IntentFacts(intent: .fridge, lines: ["Your fridge list is empty. Add items in Kitchen → Fridge."] + shopping,
+                               hasData: !shopping.isEmpty)
         }
         var byLoc: [String: Int] = [:]
         for i in items { byLoc[i.location ?? "Fridge", default: 0] += 1 }
@@ -455,6 +464,7 @@ enum KellyFacts {
         if !good.isEmpty {
             lines.append("Have plenty: " + good.prefix(15).map { "\($0.emoji) \($0.name)" }.joined(separator: ", "))
         }
+        lines += shoppingLines()
         return IntentFacts(intent: .fridge, lines: lines, hasData: true)
     }
 

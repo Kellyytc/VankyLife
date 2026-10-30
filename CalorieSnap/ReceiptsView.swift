@@ -15,8 +15,15 @@ typealias ReceiptsView = RecipesView
 enum KitchenSection: String, CaseIterable, Identifiable {
     case fridge = "Fridge"
     case recipes = "Recipes"
+    case shopping = "Shopping"
     var id: String { rawValue }
-    var icon: String { self == .fridge ? "refrigerator" : "book.closed" }
+    var icon: String {
+        switch self {
+        case .fridge: return "refrigerator"
+        case .recipes: return "book.closed"
+        case .shopping: return "cart"
+        }
+    }
 }
 
 struct KitchenView: View {
@@ -36,8 +43,9 @@ struct KitchenView: View {
             .background(Color(.systemGroupedBackground))
 
             switch section {
-            case .fridge:  FridgeView()
-            case .recipes: RecipesView()
+            case .fridge:   FridgeView()
+            case .recipes:  RecipesView()
+            case .shopping: ShoppingView()
             }
         }
     }
