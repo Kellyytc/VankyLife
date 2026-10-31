@@ -390,6 +390,9 @@ enum KellyFacts {
             return IntentFacts(intent: .recipes, lines: ["No saved recipes yet."], hasData: false)
         }
         var lines = ["\(all.count) saved recipes, \(all.filter(\.isFavorite).count) favourites"]
+        for note in KitchenNotesStore.shared.notes.prefix(6) {
+            lines.append("Her kitchen note: \(String(note.text.prefix(120)))")
+        }
         func describe(_ r: SavedRecipe) -> String {
             let p = r.parsed
             var s = r.displayTitle

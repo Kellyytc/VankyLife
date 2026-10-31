@@ -74,6 +74,8 @@ struct RecipesView: View {
     var body: some View {
         NavigationStack {
             List {
+                Section { KitchenNotesCard() }
+
                 if !store.recipes.isEmpty {
                     Section {
                         ScrollView(.horizontal, showsIndicators: false) {
@@ -334,6 +336,8 @@ struct RecipeDetailView: View {
                         }
                     }
                 }
+
+                RecipeKitchenNotesSection(recipeText: r.displayTitle + "\n" + r.keptText)
 
                 if !parsed.tips.isEmpty {
                     Section("Tips") {

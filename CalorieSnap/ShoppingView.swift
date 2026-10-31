@@ -110,7 +110,15 @@ final class ShoppingStore: ObservableObject {
 /// Location notifications for every store that still has something to buy.
 enum GeoReminders {
     private static let prefix = "shop-"
-    static let radius: CLLocationDistance = 150      // metres around the store
+    /// How far from the store the reminder comes (metres). Chosen on the Shopping page; default about 0.3 mi.
+    static var radius: CLLocationDistance {
+        let saved = UserDefaults.standard.double(forKey: "shop.radius")
+        return saved > 0 ? saved : 500
+    }
+    static let distanceChoices: [(metres: Double, label: String)] = [
+        (200, "Very close (≈ 1 block)"), (500, "Close (≈ 0.3 mi)"), (800, "A bit before (≈ 0.5 mi)"),
+        (1600, "Early (≈ 1 mi)"), (3200, "Very early (≈ 2 mi)"),
+    ]
     static let maxRegions = 20                       // iOS limit per app
 
     static func schedule(for lists: [ShopList]) {
@@ -308,6 +316,13 @@ struct ShoppingView: View {
     @ObservedObject private var store = ShoppingStore.shared
     @ObservedObject private var location = ShopLocation.shared
     @State private var showAdd = false
+    @State private var radiusVersion = 0
+
+    private var distanceLabel: String {
+        _ = radiusVersion
+        let miles = GeoReminders.radius / 1609.34
+        return miles < 0.2 ? "\(Int(GeoReminders.radius)) m" : String(format: "%.1f mi", miles)
+    }
 
     var body: some View {
         NavigationStack {
@@ -332,6 +347,20 @@ struct ShoppingView: View {
 
                 if location.canRemind && !store.lists.isEmpty {
                     Section {
+                        Picker(selection: Binding(
+                            get: { GeoReminders.radius },
+                            set: { metres in
+                                UserDefaults.standard.set(metres, forKey: "shop.radius")
+                                radiusVersion += 1
+                                GeoReminders.schedule(for: store.lists)
+                            })) {
+                            ForEach(GeoReminders.distanceChoices, id: \.metres) { c in
+                                Text(c.label).tag(c.metres)
+                            }
+                        } label: {
+                            Label("Remind me", systemImage: "bell.badge")
+                        }
+                        .id(radiusVersion)
                         Toggle(isOn: Binding(get: { location.followMe }, set: { location.setFollowMe($0) })) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Update as I move")
@@ -364,7 +393,7 @@ struct ShoppingView: View {
                         }
                         .onDelete { store.lists.remove(atOffsets: $0) }
                     } footer: {
-                        Text("You'll get a reminder within about \(Int(GeoReminders.radius)) m of one of the store's branches while its list has items.")
+                        Text("You'll get a reminder when you're about \(distanceLabel) from one of the store's branches while its list has items.")
                     }
                 }
             }
