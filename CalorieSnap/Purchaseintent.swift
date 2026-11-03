@@ -50,6 +50,30 @@ enum PurchaseLogger {
         } else {
             shared.set(stillPending, forKey: "pendingPurchases")
         }
+        // For Finance → + → Check Apple Pay link
+        shared.set(Date().timeIntervalSince1970, forKey: "lastMerged")
+        shared.set(waiting.count - min(stillPending.count, waiting.count), forKey: "lastMergedCount")
+    }
+
+    /// What the Apple Pay link can see, for the check screen (title, detail, OK?).
+    static func linkStatus() -> [(String, String, Bool)] {
+        let groupOK = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.kelly.kellylife") != nil
+        let shared = UserDefaults(suiteName: "group.com.kelly.kellylife")
+        func when(_ key: String) -> String {
+            guard let t = shared?.double(forKey: key), t > 0 else { return "never" }
+            return Date(timeIntervalSince1970: t).formatted(date: .abbreviated, time: .shortened)
+        }
+        let lastRun = shared?.double(forKey: "lastIntentRun") ?? 0
+        let pending = (shared?.array(forKey: "pendingPurchases") as? [[String: Any]])?.count ?? 0
+        return [
+            ("App Group in Kelly Life", groupOK ? "OK" : "Missing: add group.com.kelly.kellylife to the CalorieSnap target", groupOK),
+            ("Last purchase the Shortcut sent",
+             lastRun > 0 ? "\(when("lastIntentRun")): \(shared?.string(forKey: "lastIntentPurchase") ?? "")"
+                         : "Nothing received yet. If the Shortcut ran, the KellyLifeIntents target is missing the App Group.",
+             lastRun > 0),
+            ("Waiting to be added", pending == 0 ? "0" : "\(pending) (amount couldn't be read yet, or app not opened since)", pending == 0),
+            ("Last added to Finance", "\(when("lastMerged")) (\(shared?.integer(forKey: "lastMergedCount") ?? 0) purchases)", true),
+        ]
     }
 
     /// Reads "$5.00", "USD 5.00", "5,00", "CA$1,234.56", "12,34 €", "-5.00" and similar,
@@ -95,7 +119,8 @@ enum PurchaseLogger {
     }()
     #endif
 
-    /// Adds the purchase unless the same one was logged in the last 3 minutes.
+    /// Adds the purchase unless the same one was logged in the last 3 minutes,
+    /// or a bank statement import already has it.
     @discardableResult
     static func add(amount: Double, merchant: String, card: String, date: Date = Date()) -> Bool {
         let d = UserDefaults.standard
@@ -106,6 +131,11 @@ enum PurchaseLogger {
         let value = abs(amount)
 
         if all.contains(where: { $0.title == title && abs($0.amount - value) < 0.005 && abs($0.date.timeIntervalSince(date)) < 180 }) {
+            return false
+        }
+        // Already came in from a bank statement (same amount within 3 days)? Then don't add it twice.
+        if all.contains(where: { $0.note.hasPrefix("Imported from") && abs($0.amount - value) < 0.005
+                                 && abs($0.date.timeIntervalSince(date)) < 3 * 86_400 }) {
             return false
         }
         let category: TransactionCategory = isRefund ? .other : guessCategory(title)

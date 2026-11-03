@@ -41,6 +41,9 @@ struct LogPurchaseIntent: AppIntent {
             "date": Date().timeIntervalSince1970,
         ])
         shared.set(waiting, forKey: "pendingPurchases")
+        // For the "Apple Pay link" check in Kelly Life → Finance
+        shared.set(Date().timeIntervalSince1970, forKey: "lastIntentRun")
+        shared.set("\(amount) at \(merchant ?? "?")", forKey: "lastIntentPurchase")
         return .result()
     }
 }

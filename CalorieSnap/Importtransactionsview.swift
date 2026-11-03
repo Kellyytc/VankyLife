@@ -27,6 +27,7 @@ struct ImportRow: Identifiable {
     var include: Bool
     var isDuplicate: Bool
     var isCardPayment: Bool
+    var matchedID: UUID? = nil    // the app transaction (Apple Pay or typed in) this statement line matches
 }
 
 // MARK: - Reading the file
@@ -253,6 +254,37 @@ enum BankCSV {
         return .other
     }
 
+    /// Pairs statement lines with transactions already in the app: same amount (to the cent),
+    /// same type, and dated within 3 days (cards often post a day or two after you pay).
+    /// Each app transaction is used once, so two $5 coffees on the statement need two $5 entries.
+    /// Closest date wins; a shared word in the name breaks ties.
+    static func matchExisting(_ rows: [ImportRow], existing: [Transaction]) -> [UUID: UUID] {
+        let cal = Calendar.current
+        var available = existing
+        var result: [UUID: UUID] = [:]      // row id → transaction id
+        func words(_ s: String) -> Set<String> {
+            Set(s.lowercased().split(whereSeparator: { !$0.isLetter }).map(String.init).filter { $0.count >= 3 })
+        }
+        for row in rows.sorted(by: { $0.date < $1.date }) {
+            let rowDay = cal.startOfDay(for: row.date)
+            let rowWords = words(row.title)
+            var best: (index: Int, score: Int)?
+            for (i, t) in available.enumerated() {
+                guard abs(t.amount - row.amount) < 0.005, (t.type == .expense) == row.isExpense else { continue }
+                let days = abs(cal.dateComponents([.day], from: cal.startOfDay(for: t.date), to: rowDay).day ?? 99)
+                guard days <= 3 else { continue }
+                var score = 10 - days * 2
+                if !rowWords.isDisjoint(with: words(t.title)) { score += 5 }
+                if best == nil || score > best!.score { best = (i, score) }
+            }
+            if let b = best {
+                result[row.id] = available[b.index].id
+                available.remove(at: b.index)
+            }
+        }
+        return result
+    }
+
     /// Same day (±1), same amount, and the names share a word: already in the app.
     static func isDuplicate(_ row: ImportRow, existing: [Transaction]) -> Bool {
         let cal = Calendar.current
@@ -465,6 +497,25 @@ struct ImportTransactionsView: View {
                     introSection
                 } else {
                     summarySection
+                    let missing = notOnStatement
+                    if !missing.isEmpty {
+                        Section {
+                            ForEach(missing) { t in
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(t.title).font(.subheadline).lineLimit(1)
+                                        Text(t.date.formatted(.dateTime.month(.abbreviated).day())).font(.caption2).foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Text(String(format: "$%.2f", t.amount)).font(.subheadline)
+                                }
+                            }
+                        } header: {
+                            Text("Apple Pay purchases not on this statement")
+                        } footer: {
+                            Text("These were recorded by tap-to-pay in this date range but aren't on this statement. Usually they were paid with a different card, or are still pending. If one was refunded or cancelled, delete it in Records.")
+                        }
+                    }
                     Section {
                         ForEach($rows) { $row in
                             if showSkipped || !(row.isDuplicate || row.isCardPayment) || row.include {
@@ -543,8 +594,12 @@ struct ImportTransactionsView: View {
                     .font(.caption)
                 let dupes = rows.filter(\.isDuplicate).count
                 let payments = rows.filter(\.isCardPayment).count
-                if dupes + payments > 0 {
-                    Text("Skipping \(dupes) already in the app and \(payments) card payments or transfers.")
+                if dupes > 0 {
+                    Text("✓ \(dupes) already recorded (Apple Pay or added by hand): same amount within 3 days. They won't be added twice and will be marked \"✓ On statement\".")
+                        .font(.caption).foregroundStyle(.green)
+                }
+                if payments > 0 {
+                    Text("Skipping \(payments) card payments or transfers.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -567,6 +622,18 @@ struct ImportTransactionsView: View {
             Button("Choose a different file") { rows = []; showPicker = true }
                 .font(.subheadline)
         }
+    }
+
+    /// Apple Pay entries in the statement's date range that no statement line matched.
+    private var notOnStatement: [Transaction] {
+        guard let first = rows.map(\.date).min(), let last = rows.map(\.date).max() else { return [] }
+        let matched = Set(rows.compactMap(\.matchedID))
+        let start = Calendar.current.startOfDay(for: first)
+        let end = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: last)) ?? last
+        return store.transactions.filter {
+            $0.note.contains("Apple Pay") && $0.date >= start && $0.date < end && !matched.contains($0.id)
+        }
+        .sorted { $0.date > $1.date }
     }
 
     private func addingText(expenses: Int, total: Double) -> String {
@@ -622,8 +689,13 @@ struct ImportTransactionsView: View {
             rows[i].isExpense = expense
             rows[i].isCardPayment = BankCSV.isCardPayment(r.title)
             rows[i].category = expense ? PurchaseLogger.guessCategory(r.title) : BankCSV.incomeCategory(r.title)
-            rows[i].isDuplicate = BankCSV.isDuplicate(rows[i], existing: store.transactions)
-            rows[i].include = expense && !rows[i].isCardPayment && !rows[i].isDuplicate
+        }
+        // Cross-check with what's already recorded (Apple Pay automation or typed in by hand)
+        let matches = BankCSV.matchExisting(rows, existing: store.transactions)
+        for i in rows.indices {
+            rows[i].matchedID = matches[rows[i].id]
+            rows[i].isDuplicate = rows[i].matchedID != nil
+            rows[i].include = rows[i].isExpense && !rows[i].isCardPayment && !rows[i].isDuplicate
         }
         // Newest first, like the Records list
         rows.sort { $0.date > $1.date }
@@ -634,6 +706,14 @@ struct ImportTransactionsView: View {
         let new = selected.map { r in
             Transaction(title: r.title, amount: r.amount, type: r.isExpense ? .expense : .income,
                         category: r.category, date: r.date, note: note, emoji: r.category.emoji)
+        }
+        // Mark the app's own entries that this statement confirmed
+        let confirmed = Set(rows.compactMap(\.matchedID))
+        for i in store.transactions.indices where confirmed.contains(store.transactions[i].id) {
+            if !store.transactions[i].note.contains("✓ On statement") {
+                let old = store.transactions[i].note
+                store.transactions[i].note = old.isEmpty ? "✓ On statement" : old + " · ✓ On statement"
+            }
         }
         store.transactions.append(contentsOf: new)
         dismiss()
@@ -660,7 +740,7 @@ private struct ImportRowView: View {
                 Text(row.title).font(.subheadline).lineLimit(1)
                 HStack(spacing: 6) {
                     Text(row.date.formatted(.dateTime.month(.abbreviated).day().year()))
-                    if row.isDuplicate { tag("Already added", .orange) }
+                    if row.isDuplicate { tag("✓ Already recorded", .green) }
                     if row.isCardPayment { tag("Card payment", .gray) }
                 }
                 .font(.caption2).foregroundStyle(.secondary)

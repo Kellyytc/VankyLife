@@ -912,6 +912,7 @@ struct FinanceView: View {
     @State private var showAddTransaction = false
     @State private var showBudgetSettings = false
     @State private var showImport = false
+    @State private var showApplePayCheck = false
     @State private var selectedTab: FinanceTab = .overview
 
     enum PeriodTab: String, CaseIterable {
@@ -983,6 +984,9 @@ struct FinanceView: View {
                         Button(action: { showImport = true }) {
                             Label("Import from Bank CSV", systemImage: "tray.and.arrow.down")
                         }
+                        Button(action: { PurchaseLogger.mergePending(); store.load(); showApplePayCheck = true }) {
+                            Label("Check Apple Pay link", systemImage: "wave.3.right.circle")
+                        }
                         Button(action: { showBudgetSettings = true }) {
                             Label("Set Budget", systemImage: "target")
                         }
@@ -992,6 +996,32 @@ struct FinanceView: View {
             .sheet(isPresented: $showAddTransaction) { AddTransactionView(store: store) }
             .sheet(isPresented: $showBudgetSettings) { BudgetSettingsView(store: store) }
             .sheet(isPresented: $showImport) { ImportTransactionsView(store: store) }
+            .sheet(isPresented: $showApplePayCheck) { ApplePayCheckView() }
+        }
+    }
+}
+
+// MARK: - Apple Pay link check
+
+struct ApplePayCheckView: View {
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(Array(PurchaseLogger.linkStatus().enumerated()), id: \.offset) { _, row in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Image(systemName: row.2 ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                                .foregroundStyle(row.2 ? .green : .orange)
+                            Text(row.0).font(.subheadline).fontWeight(.semibold)
+                        }
+                        Text(row.1).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .navigationTitle("Apple Pay link")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
     }
 }
