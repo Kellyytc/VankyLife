@@ -119,7 +119,7 @@ struct RecipeParser {
         pattern: #"^\s*(\d{1,2})\s*[|｜]?\s*(?![\d.,/:：\-–~～%])(\D.*)$"#)
     // "- 60g milk", "• 2 eggs"
     private static let bulletRegex = try! NSRegularExpression(
-        pattern: #"^\s*[-•*·▪◦]\s*(.+)$"#)
+        pattern: #"^\s*[-•*·▪◦●■□◆]\s*(.+)$"#)
     private static let units = #"g|kg|mg|ml|mL|l|L|tbsp|tsp|cups?|oz|lbs?|pcs?|cloves?|slices?|克|千克|公斤|毫升|升|勺|小勺|大勺|汤匙|茶匙|杯|碗|个|只|枚|片|根|颗|瓣|块|条|把|包|袋|盒|罐"#
     // "300mL water", "2 tbsp sugar", "3 克 盐"
     private static let quantityRegex = try! NSRegularExpression(
@@ -169,6 +169,9 @@ struct RecipeParser {
             .replacingOccurrences(of: "🔟", with: "10. ")
             .trimmingCharacters(in: .whitespaces)
         let circled = Array("①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳")
+        while let f = t.first, "■□▪◆◇●○".contains(f) {
+            t = String(t.dropFirst()).trimmingCharacters(in: .whitespaces)
+        }
         if let f = t.first, let i = circled.firstIndex(of: f) {
             t = "\(i + 1). " + t.dropFirst().trimmingCharacters(in: .whitespaces)
         }
@@ -293,6 +296,8 @@ struct RecipeParser {
             if section == .steps {
                 if let step = stepText(line, loose: true) {
                     result.steps.append(step); sawNumbered = true; lastWasStep = true
+                } else if match(bulletRegex, line) != nil {
+                    result.steps.append(stripBulletText(line)); sawNumbered = true; lastWasStep = true
                 } else if sawNumbered && lastWasStep {
                     appendToLastStep(line)
                 } else {
@@ -311,6 +316,12 @@ struct RecipeParser {
             if let list = inlineList(line) {
                 if let label = list.label { result.ingredients.append("【\(label)】") }
                 result.ingredients += list.items
+                section = .ingredients; lastWasStep = false
+                continue
+            }
+            // "高筋面粉250g | 抹茶粉5g | 白砂糖35g" — one ingredient per amount
+            if let parts = splitByAmounts(line) {
+                result.ingredients += parts
                 section = .ingredients; lastWasStep = false
                 continue
             }
@@ -376,7 +387,7 @@ struct RecipeParser {
                 body = String(line[r.upperBound...])
             }
         }
-        let items = body.split(whereSeparator: { "，,、；;".contains($0) })
+        let items = body.split(whereSeparator: { "，,、；;|｜丨".contains($0) })
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
         guard items.count >= 2, items.allSatisfy({ $0.count <= 18 }) else { return nil }
@@ -391,6 +402,63 @@ struct RecipeParser {
             guard items.count >= 3, withAmounts * 3 >= items.count * 2 else { return nil }
         }
         return (label, items)
+    }
+
+    private static let amountRegex = try! NSRegularExpression(
+        pattern: #"(?:\d+(?:\.\d+)?|½|¼|¾|⅓)\s*(?:"# + units + #")(?![A-Za-z])"#,
+        options: .caseInsensitive)
+    private static let leadingSeparatorRegex = try! NSRegularExpression(pattern: #"^(?:[|｜丨/，,、；;]|[Il](?=\s))\s*"#)
+
+    /// A line holding several ingredients, each ending in an amount:
+    /// "高筋面粉250g | 抹茶粉5g | 白砂糖35g" → ["高筋面粉250g", "抹茶粉5g", "白砂糖35g"].
+    /// Every piece must look like "name + amount", so cooking steps such as
+    /// "加入黄油30g和糖20g搅拌均匀" are left alone.
+    static func splitByAmounts(_ line: String) -> [String]? {
+        let ns = line as NSString
+        let matches = amountRegex.matches(in: line, range: NSRange(location: 0, length: ns.length))
+        guard matches.count >= 2 else { return nil }
+        var parts: [String] = []
+        var start = 0
+        for m in matches {
+            var end = m.range.location + m.range.length
+            // keep a bracketed note with its ingredient: "鸡蛋1个（约50g）"
+            if end < ns.length, let close = bracketEnd(in: ns, from: end) { end = close }
+            guard end > start else { continue }
+            parts.append(ns.substring(with: NSRange(location: start, length: end - start)))
+            start = end
+        }
+        let tail = ns.substring(from: start).trimmingCharacters(in: .whitespaces)
+        if !tail.isEmpty, !parts.isEmpty { parts[parts.count - 1] += tail }
+
+        let cleaned: [String] = parts.map { piece in
+            var t = piece.trimmingCharacters(in: .whitespaces)
+            let tns = t as NSString
+            if let m = leadingSeparatorRegex.firstMatch(in: t, range: NSRange(location: 0, length: tns.length)) {
+                t = tns.substring(from: m.range.length)
+            }
+            return t.trimmingCharacters(in: CharacterSet(charactersIn: " |｜丨/，,、；;"))
+        }.filter { !$0.isEmpty }
+        guard cleaned.count >= 2 else { return nil }
+        let allLookLikeIngredients = cleaned.allSatisfy {
+            $0.count <= 24 && (match(trailingQuantityRegex, $0) != nil || match(quantityRegex, $0) != nil)
+        }
+        return allLookLikeIngredients ? cleaned : nil
+    }
+
+    /// If text at `from` is a bracketed note like "（约50g）", returns where it ends.
+    private static func bracketEnd(in ns: NSString, from: Int) -> Int? {
+        var i = from
+        while i < ns.length, ns.character(at: i) == 0x20 { i += 1 }
+        guard i < ns.length else { return nil }
+        let c = ns.character(at: i)
+        guard c == 0x28 || c == 0xFF08 else { return nil }   // ( or （
+        var j = i + 1
+        while j < ns.length {
+            let d = ns.character(at: j)
+            if d == 0x29 || d == 0xFF09 { return j + 1 }      // ) or ）
+            j += 1
+        }
+        return nil
     }
 
     /// Joins two pieces of a wrapped line; Chinese text joins without a space.
