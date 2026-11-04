@@ -267,7 +267,7 @@ struct RecipeParser {
             result.steps[result.steps.count - 1] = joinText(last, line)
         }
 
-        for raw in rawLines {
+        for raw in rawLines.flatMap(splitGluedHeadings) {
             let line = normalize(raw)
             guard !line.isEmpty, !isJunk(line) else { continue }
             if isHashtagLine(line) { lastWasStep = false; continue }
@@ -307,6 +307,13 @@ struct RecipeParser {
             if let step = stepText(line, loose: false) {
                 result.steps.append(step); sawNumbered = true; lastWasStep = true; continue
             }
+            // "面团：高粉250g，糖25g，酵母3g…" — a whole ingredient list on one line
+            if let list = inlineList(line) {
+                if let label = list.label { result.ingredients.append("【\(label)】") }
+                result.ingredients += list.items
+                section = .ingredients; lastWasStep = false
+                continue
+            }
             if section == .ingredients && line.count <= 30 {
                 result.ingredients.append(line); continue
             }
@@ -325,6 +332,65 @@ struct RecipeParser {
             !(item.hasPrefix("【") && (i == result.ingredients.count - 1 || result.ingredients[i + 1].hasPrefix("【")))
         }.map(\.element)
         return result
+    }
+
+    private static let gluedHeadingRegex = try! NSRegularExpression(
+        pattern: #"(制作过程|制作方法|制作步骤|步骤|做法|材料|配料|食材|用料|小贴士|Ingredients|Method|Directions|Steps)\s*[:：]"#,
+        options: .caseInsensitive)
+
+    /// Splits a heading that OCR glued onto the previous text ("…柴鱼片步骤：") onto its own line,
+    /// and moves text written after a steps heading ("步骤：1.材料放入…") to the next line.
+    static func splitGluedHeadings(_ raw: String) -> [String] {
+        let ns = raw as NSString
+        var lines: [String] = []
+        var rest = raw
+        if let m = gluedHeadingRegex.firstMatch(in: raw, range: NSRange(location: 0, length: ns.length)), m.range.location > 0 {
+            lines.append(ns.substring(to: m.range.location))
+            rest = ns.substring(from: m.range.location)
+        }
+        let restNS = rest as NSString
+        if let m = gluedHeadingRegex.firstMatch(in: rest, range: NSRange(location: 0, length: restNS.length)),
+           m.range.location == 0, m.range.length < restNS.length {
+            let headingText = restNS.substring(with: m.range)
+            let after = restNS.substring(from: m.range.location + m.range.length).trimmingCharacters(in: .whitespaces)
+            let word = headingText.trimmingCharacters(in: CharacterSet(charactersIn: ":： ")).lowercased()
+            // Only steps/tips headings are split; "材料：鸡蛋2个，…" stays together as a labelled list
+            if stepWords.contains(word) || tipWords.contains(word), !after.isEmpty {
+                lines.append(headingText); lines.append(after)
+                return lines
+            }
+        }
+        lines.append(rest)
+        return lines
+    }
+
+    /// A whole ingredient list on one line: "面团：高粉250g，糖25g，酵母3g" → ("面团", [...]),
+    /// "装饰：卷心菜、培根、沙拉酱" → ("装饰", [...]), or an unlabelled "flour 200g, sugar 20g, salt 3g".
+    static func inlineList(_ line: String) -> (label: String?, items: [String])? {
+        var body = line
+        var label: String?
+        if let r = line.range(of: "[:：]", options: .regularExpression) {
+            let head = line[..<r.lowerBound].trimmingCharacters(in: .whitespaces)
+            if !head.isEmpty, head.count <= 8, head.rangeOfCharacter(from: .decimalDigits) == nil {
+                label = head
+                body = String(line[r.upperBound...])
+            }
+        }
+        let items = body.split(whereSeparator: { "，,、；;".contains($0) })
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        guard items.count >= 2, items.allSatisfy({ $0.count <= 18 }) else { return nil }
+        let withAmounts = items.filter { isIngredient($0) }.count
+        if let l = label {
+            let lower = l.lowercased()
+            if stepWords.contains(where: { lower.contains($0) }) || tipWords.contains(where: { lower.contains($0) }) { return nil }
+            guard withAmounts >= 1 || items.allSatisfy({ $0.count <= 8 }) else { return nil }
+            // "材料：…" / "Ingredients: …" need no extra group label
+            if ingredientWords.contains(where: { lower.contains($0) }) { label = nil }
+        } else {
+            guard items.count >= 3, withAmounts * 3 >= items.count * 2 else { return nil }
+        }
+        return (label, items)
     }
 
     /// Joins two pieces of a wrapped line; Chinese text joins without a space.
