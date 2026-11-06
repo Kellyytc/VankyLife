@@ -302,6 +302,7 @@ struct ContentView: View {
                 financeStore.load(); openPendingStatement()
                 // Your watch/ring often syncs last night's sleep after you wake up, so check again
                 Task { await EnergyStore.shared.loadIfStale(maxAge: 120) }
+                AppExpiry.scheduleReminders()          // free-account install: remind before it expires
             }
         }
         // A bank statement (CSV or PDF) shared to Kelly Life from Mail, Files or a bank app
@@ -318,7 +319,9 @@ struct ContentView: View {
             PurchaseLogger.mergePending(); financeStore.load(); openPendingStatement()
             _ = ShoppingStore.shared
             ShopLocation.shared.resume()
+            AppExpiry.scheduleReminders()
         }
+        .safeAreaInset(edge: .top, spacing: 0) { AppExpiryBanner() }
         .onReceive(NotificationCenter.default.publisher(for: PurchaseLogger.didAddPurchase)) { _ in
             financeStore.load()
         }
